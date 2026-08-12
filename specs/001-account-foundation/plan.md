@@ -6,7 +6,7 @@
 
 ## Summary
 
-Implementar a fundação de contas da zappermeow: bootstrap do super-admin via configuração, login por email/senha emitindo JWT de curta duração em dois audiences (plataforma e tenant), CRUD de tenants com suspensão reversível em cascata e exclusão definitiva, registro de instâncias (sem pareamento), API keys por instância (múltiplas, show-once, revogação imediata), gestão de senhas sem SMTP e proteção anti força bruta no login.
+Implementar a fundação de contas da ZapperMeow: bootstrap do super-admin via configuração, login por email/senha emitindo JWT de curta duração em dois audiences (plataforma e tenant), CRUD de tenants com suspensão reversível em cascata e exclusão definitiva, registro de instâncias (sem pareamento), API keys por instância (múltiplas, show-once, revogação imediata), gestão de senhas sem SMTP e proteção anti força bruta no login.
 
 Abordagem técnica: serviço único `zappermeow serve` (plano stateless) com chi + huma (OpenAPI 3.1 gerado), Postgres 17 via pgx/sqlc para todo o estado de contas (incl. bloqueio de login, durável), Redis + redis_rate apenas para limite por origem no login e rate limit da rota operacional, senhas com Argon2id, API keys com hash SHA-256 de segredos de alta entropia, e revogação imediata garantida por checagem de status (usuário/tenant/key) no banco a cada requisição autenticada. **Nenhuma dependência do HyperMeow nesta feature** — instância aqui é só cadastro; sessão/lease/worker ficam para a feature de pareamento.
 

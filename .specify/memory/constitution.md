@@ -24,7 +24,7 @@ Removed sections: nenhuma
 Deferred items / TODOs: nenhum
 -->
 
-# zappermeow Constitution
+# ZapperMeow Constitution
 
 ## Core Principles
 

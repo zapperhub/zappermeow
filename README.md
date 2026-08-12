@@ -1,4 +1,4 @@
-# zappermeow
+# ZapperMeow
 
 API RESTful **open source e self-hosted** para WhatsApp, multi-tenant, construída em Go sobre a biblioteca [HyperMeow](https://github.com/polymorfa/hypermeow) (fork production-focused do whatsmeow).
 

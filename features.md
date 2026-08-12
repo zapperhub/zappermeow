@@ -1,4 +1,4 @@
-# zappermeow — Levantamento de Funcionalidades do HyperMeow
+# ZapperMeow — Levantamento de Funcionalidades do HyperMeow
 
 Levantamento das funcionalidades disponíveis na biblioteca [polymorfa/hypermeow](https://github.com/polymorfa/hypermeow) (fork production-focused do `tulir/whatsmeow`, escrito em Go) para servir de base à construção de uma API RESTful completa.
 

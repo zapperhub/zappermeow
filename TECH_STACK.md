@@ -1,6 +1,6 @@
 # Tech Stack
 
-Stack tecnológica da **zappermeow** — API RESTful multi-tenant sobre a biblioteca [HyperMeow](https://github.com/polymorfa/hypermeow) (ver [features.md](features.md)).
+Stack tecnológica da **ZapperMeow** — API RESTful multi-tenant sobre a biblioteca [HyperMeow](https://github.com/polymorfa/hypermeow) (ver [features.md](features.md)).
 
 **Princípios que guiaram as escolhas:** multi-tenancy segura, estabilidade, performance e leveza operacional. Preferência por stdlib e bibliotecas pequenas sem lock-in; SQL explícito em vez de ORM; uma única instância de Redis e Postgres servindo múltiplos papéis antes de adicionar novas peças de infra.
 

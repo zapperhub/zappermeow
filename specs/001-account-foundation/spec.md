@@ -12,7 +12,7 @@
 
 ### User Story 1 - Super-admin faz login e gerencia tenants (Priority: P1)
 
-O operador da plataforma instala a zappermeow, define a credencial inicial do super-admin na configuração do deploy, faz login com email/senha e recebe um token de plataforma de curta duração. Com ele, cria, lista, consulta e edita tenants — cada tenant nasce com seu admin (nome, email e senha inicial).
+O operador da plataforma instala a ZapperMeow, define a credencial inicial do super-admin na configuração do deploy, faz login com email/senha e recebe um token de plataforma de curta duração. Com ele, cria, lista, consulta e edita tenants — cada tenant nasce com seu admin (nome, email e senha inicial).
 
 **Why this priority**: É a raiz de toda a hierarquia de contas. Sem super-admin autenticado e sem tenants, nenhum outro ator existe no sistema. É o menor MVP que já entrega valor: a plataforma consegue fazer onboarding de um cliente.
 

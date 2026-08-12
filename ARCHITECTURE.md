@@ -1,6 +1,6 @@
 # Arquitetura de Serviços
 
-Como a **zappermeow** se organiza em serviços, com foco na separação entre o plano **stateless** (API REST) e o plano **stateful** (sessões WhatsApp). Complementa [TECH_STACK.md](TECH_STACK.md) e [features.md](features.md).
+Como a **ZapperMeow** se organiza em serviços, com foco na separação entre o plano **stateless** (API REST) e o plano **stateful** (sessões WhatsApp). Complementa [TECH_STACK.md](TECH_STACK.md) e [features.md](features.md).
 
 ## O problema central
 
