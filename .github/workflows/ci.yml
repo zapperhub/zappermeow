@@ -34,8 +34,13 @@ jobs:
           SQLC_VERSION: "1.31.1"
         run: |
           mkdir -p "$RUNNER_TEMP/sqlc"
-          curl -fsSL "https://github.com/sqlc-dev/sqlc/releases/download/v${SQLC_VERSION}/sqlc_${SQLC_VERSION}_linux_amd64.tar.gz" \
-            | tar -xz -C "$RUNNER_TEMP/sqlc" sqlc
+          # Baixa para arquivo (em vez de canalizar direto no tar) para que uma
+          # falha de rede apareça como erro de download, e não como um tarball
+          # truncado. O --retry cobre os 5xx transitórios do CDN da release.
+          curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+            -o "$RUNNER_TEMP/sqlc.tar.gz" \
+            "https://github.com/sqlc-dev/sqlc/releases/download/v${SQLC_VERSION}/sqlc_${SQLC_VERSION}_linux_amd64.tar.gz"
+          tar -xzf "$RUNNER_TEMP/sqlc.tar.gz" -C "$RUNNER_TEMP/sqlc" sqlc
           "$RUNNER_TEMP/sqlc/sqlc" generate
           git diff --exit-code -- internal/store || {
             echo "::error::sqlc output is stale; run 'sqlc generate' and commit the result"
