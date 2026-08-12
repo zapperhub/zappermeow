@@ -1,1 +1,104 @@
+# ---------------------------------------------------------------------------
+# Go
+# ---------------------------------------------------------------------------
+# Binários compilados (o binário do projeto é `zappermeow`)
+/zappermeow
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Workspace do Go (local do desenvolvedor)
+go.work
+go.work.sum
+
+# Cobertura e profiling
+coverage.txt
+coverage.html
+coverage.out
+*.cover
+*.prof
+*.pprof
+cpu.out
+mem.out
+
+# Diretório de dependências vendorizadas (não usamos vendoring)
+/vendor/
+
+# ---------------------------------------------------------------------------
+# Configuração e segredos
+# ---------------------------------------------------------------------------
+# 12-factor: .env só existe em desenvolvimento local, nunca versionado.
+# Em produção os valores vêm de Docker Swarm Secrets.
+.env
+.env.*
+!.env.example
+*.local.env
+
+# Secrets montados/gerados localmente
+/secrets/
+*.pem
+*.key
+!**/testdata/**/*.pem
+!**/testdata/**/*.key
+
+# ---------------------------------------------------------------------------
+# Infra local (Docker Compose de desenvolvimento)
+# ---------------------------------------------------------------------------
+docker-compose.override.yml
+# Volumes de dados de Postgres / Redis / MinIO rodando localmente
+/data/
+/.docker-data/
+/deploy/data/
+
+# ---------------------------------------------------------------------------
+# Mídia e uploads locais
+# ---------------------------------------------------------------------------
+/tmp/
+/uploads/
+/media/
+
+# ---------------------------------------------------------------------------
+# Ferramentas de build instaladas localmente
+# ---------------------------------------------------------------------------
+# (sqlc, golang-migrate, golangci-lint, protoc-gen-*, asynqmon...)
+/tools/bin/
+/.tools/
+
+# ---------------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------------
+*.log
+/logs/
+
+# ---------------------------------------------------------------------------
+# Editores e IDEs
+# ---------------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# Sistema operacional
+# ---------------------------------------------------------------------------
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+# ---------------------------------------------------------------------------
+# Ferramentas de agentes / IA
+# ---------------------------------------------------------------------------
+.claude/settings.local.json
