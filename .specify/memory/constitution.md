@@ -1,30 +1,30 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 1.0.0 → 2.0.0
-Rationale: MAJOR — o Princípio II foi redefinido de forma incompatível: credenciais que antes
-podiam ter escopo de tenant (API keys "por tenant/instância", HMAC "por tenant", mídia "por
-tenant") agora DEVEM ter escopo de instância. Alinha a constituição às emendas de 2026-08-12
-em ARCHITECTURE.md ("Modelo de contas e isolamento"), TECH_STACK.md e features.md: modelo de
-contas em 2 níveis (plataforma → tenant → N instâncias), API keys e webhooks por instância,
-JWT em dois audiences, e remoção da noção de "plano" (billing) — o projeto é open source
-(MIT); limites são configuração operacional por tenant.
+Version change: 2.2.0 → 2.3.0
+Rationale: MINOR — a RFC 9457 passa a prevalecer sobre o modelo de referência (zapperhub)
+no padrão de respostas introduzido na v2.2.0: o envelope de sucesso troca
+`status: "success"` pelo **código HTTP numérico** da resposta, alinhando o campo à
+semântica do membro `status` dos problem details da RFC 9457. Formato vigente:
+{ "status": <código HTTP numérico>, "data": ..., "timestamp": ... }. Erros permanecem
+RFC 9457 (application/problem+json) + `code` estável + `timestamp`. É uma redefinição
+material de regra introduzida na v2.2.0 no mesmo ciclo de emendas, ainda sem qualquer
+implementação em código — por isso MINOR (mudança material de orientação), não MAJOR
+(não há contrato publicado/implementado sendo quebrado nem princípio removido).
+Referências técnicas já atualizadas: TECH_STACK.md ("Padrões da API / Envelope de
+resposta") e specs/001-account-foundation/ (contracts/http-api.md, research.md R10,
+quickstart.md).
 
 Modified principles:
-- II. "Multi-Tenancy Segura por Padrão" → "Multi-Tenancy com Isolamento por Instância"
-  (modelo de contas explícito; keys/webhooks/HMAC por instância; JWT em dois audiences;
-  autorização tenant↔instância; rate limit por key com limites por tenant, sem "plano")
-Modified sections:
-- Restrições Tecnológicas: bullet "Eventos para tenants" agora explicita configuração de
-  webhook por instância (URL, filtro, segredo próprios).
-- Fluxo de Desenvolvimento e Qualidade: entidade api_key citada no layout de domain.
-- Governance: features.md incluído nas referências técnicas complementares.
+- IV. Contrato de API como Fonte de Verdade: bullet do envelope de sucesso redefinido —
+  `status` carrega o código HTTP numérico (semântica RFC 9457), vedadas strings de estado.
+Modified sections: nenhuma outra
 Added sections: nenhuma
 Removed sections: nenhuma
 Deferred items / TODOs: nenhum
 -->
 
-# zappermeow Constitution
+# ZapperMeow Constitution
 
 ## Core Principles
 
@@ -69,8 +69,10 @@ sessão). A **instância é a unidade de isolamento**: credenciais e canais de e
   instância.
 - Mídia no MinIO DEVE usar object key prefixada por `tenant_id/instance_id` e ser servida
   apenas por URLs pré-assinadas.
-- Credenciais e chaves (banco, HMAC, JWT signing) DEVEM vir de Docker Swarm Secrets em
-  produção; env vars só como fallback de desenvolvimento. Segredos NUNCA aparecem em logs.
+- Credenciais e chaves (banco, HMAC, JWT signing) DEVEM vir do mecanismo de secrets do
+  runtime de deploy em produção — Docker Swarm Secrets no Swarm; file-based secrets
+  (`secrets:`) no Docker Compose, ambos montados em `/run/secrets` — com env vars só como
+  fallback de desenvolvimento. Segredos NUNCA aparecem em logs.
 
 **Racional:** isolamento por número é requisito de segurança — vazamento ou rotação de
 credenciais de um número não pode afetar os demais, e sistemas distintos de um mesmo tenant
@@ -101,13 +103,27 @@ documentação escrita à mão que possa dessincronizar do código é PROIBIDA. 
 
 - Todo endpoint DEVE ter request e response tipados com validação declarada no handler.
 - A spec e a UI de documentação são servidas pela própria API.
+- Toda resposta JSON de **sucesso** com corpo DEVE usar o envelope padrão
+  `{ "status": <código HTTP numérico>, "data": ..., "timestamp": ... }` — `status` carrega
+  o código HTTP da resposta, na mesma semântica do membro `status` dos problem details da
+  RFC 9457; strings de estado (`"success"`/`"error"`) são PROIBIDAS. O envelope entra nos
+  outputs tipados do huma e aparece fielmente na spec gerada. Únicas exceções: respostas
+  `204` (sem corpo) e formatos não-JSON (`/metrics` em texto Prometheus).
+- Toda resposta de **erro** DEVE seguir a RFC 9457 (`application/problem+json`, formato
+  nativo do huma) estendida com membro `code` estável e `timestamp`; detalhes por campo
+  vão em `errors[]`. O `code` é contrato para tratamento programático por clientes —
+  alterar ou remover um `code` publicado é mudança incompatível.
+- O mapeamento de erros de domínio → problem details é centralizado (pacote `httperr`);
+  handlers NÃO PODEM montar respostas de sucesso ou de erro manualmente. Respostas de erro
+  NUNCA ecoam senhas ou segredos.
 - Contratos internos api↔worker DEVEM ser definidos em Protobuf (`proto/`) e versionados no
   repositório; mudanças incompatíveis exigem coordenação explícita de deploy.
 - Mudanças incompatíveis em rotas públicas exigem versionamento de API e registro da
   quebra no changelog do release.
 
-**Racional:** com o contrato derivado do código, a documentação nunca mente; consumidores
-integram contra a spec com confiança.
+**Racional:** a API RESTful é o "frontend" do produto — o formato de resposta é parte do
+contrato tanto quanto os campos; com o contrato derivado do código, a documentação nunca
+mente e consumidores integram contra a spec com confiança.
 
 ### V. Testes Contra Infraestrutura Real
 
@@ -158,13 +174,19 @@ Stack fixa do projeto — desvios exigem emenda a esta constituição:
 - **Eventos para tenants:** webhooks HTTP assinados configurados por instância (URL, filtro
   de eventos e segredo próprios — canal principal) + WebSocket por instância
   (`/instances/{id}/ws`).
-- **Configuração:** 12-factor via env vars (`caarlos0/env`) + Swarm Secrets.
+- **Configuração:** 12-factor via env vars (`caarlos0/env`) + secrets do runtime de deploy
+  (Swarm Secrets no Swarm; file-based secrets no Compose).
 - **Runtime:** binário único `zappermeow` com três subcomandos — `serve` (api, stateless),
   `session-worker` (stateful, ~100–300 sessões/worker) e `jobs` (consumidores asynq) — cada
-  um como service no Docker Swarm, atrás de Traefik (TLS, sticky sessions só para WebSocket).
+  um como service Docker, atrás de Traefik (TLS, sticky sessions só para WebSocket).
+- **Distribuição:** a entrega inicial DEVE suportar dois alvos de deploy com paridade
+  funcional — Docker Swarm (`deploy/stack.yml` + instruções, operação multi-node) e Docker
+  Compose (`deploy/docker-compose.yml` + instruções, host único com menos infra). Toda
+  mudança de topologia de serviços DEVE ser refletida nos dois arquivos.
 - **Imagem:** build multi-stage (builder → distroless).
-- Comunicação interna (gRPC, Postgres, Redis) trafega apenas em overlay network privada; o
-  gRPC api→worker disca o `grpc_addr` registrado no lease, nunca o VIP do Swarm.
+- Comunicação interna (gRPC, Postgres, Redis) trafega apenas em rede Docker privada
+  (overlay no Swarm; bridge no Compose); o gRPC api→worker disca o `grpc_addr` registrado
+  no lease, nunca um VIP ou nome de service com balanceamento.
 
 ## Fluxo de Desenvolvimento e Qualidade
 
@@ -179,7 +201,8 @@ Stack fixa do projeto — desvios exigem emenda a esta constituição:
 - **Review:** todo PR DEVE ser revisado verificando conformidade com esta constituição —
   em especial isolamento por instância (Princípio II) e respeito ao lease de sessão
   (Princípio III). Complexidade adicional DEVE ser justificada no PR.
-- **Deploy:** `docker stack deploy` com rolling update; `session-worker` com
+- **Deploy:** Swarm via `docker stack deploy` (rolling update) ou Compose via
+  `docker compose up -d`; em ambos os alvos o `session-worker` DEVE ter
   `stop_grace_period` folgado (≥60s) para drain limpo dos leases.
 
 ## Governance
@@ -198,4 +221,4 @@ Stack fixa do projeto — desvios exigem emenda a esta constituição:
   complementam esta constituição; divergências entre eles e este documento resolvem-se em
   favor da constituição e DEVEM gerar correção em um dos lados.
 
-**Version**: 2.0.0 | **Ratified**: 2026-08-12 | **Last Amended**: 2026-08-12
+**Version**: 2.3.0 | **Ratified**: 2026-08-12 | **Last Amended**: 2026-08-12

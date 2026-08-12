@@ -1,0 +1,37 @@
+# Keep the build context to what the compiler actually needs.
+.git/
+.github/
+.specify/
+.claude/
+specs/
+
+# Docs
+*.md
+LICENSE
+
+# Local build output and tooling
+/bin/
+/dist/
+/vendor/
+/zappermeow
+*.exe
+*.test
+*.out
+coverage.*
+*.prof
+*.pprof
+
+# Secrets and local configuration must never enter an image layer.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor and OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
