@@ -1,0 +1,49 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errorlint
+    - gosec
+    - misspell
+    - nilerr
+    - noctx
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - unconvert
+    - unparam
+    - wastedassign
+  settings:
+    gosec:
+      excludes:
+        # G115: integer conversion overflow — noisy on intentional int/int32 conversions.
+        - G115
+        # G101: "hardcoded credentials" — matches our stable error codes
+        # (INVALID_CREDENTIALS) and header names (X-Api-Key), neither of which
+        # is a secret. Real secrets come from the deploy runtime, never source.
+        - G101
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+  exclusions:
+    rules:
+      - path: _test\.go$
+        linters:
+          - gosec
+          - unparam
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/zapperhub/zappermeow
