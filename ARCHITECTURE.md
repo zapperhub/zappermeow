@@ -53,7 +53,7 @@ flowchart LR
 
 ## Os três papéis do binário
 
-Um único binário/imagem (`zappermeow`), três subcomandos — cada um vira um service no Swarm:
+Um único binário/imagem (`zappermeow`), três subcomandos — cada um vira um service Docker (no Swarm via `stack.yml`, no Compose via `docker-compose.yml`):
 
 | Papel | Comando | Estado | Escala |
 | --- | --- | --- | --- |
@@ -103,7 +103,7 @@ Tabela `session_leases` — a única fonte de verdade sobre quem detém cada ses
 ```sql
 CREATE TABLE session_leases (
     instance_id   uuid PRIMARY KEY REFERENCES instances(id),
-    worker_id     text,                    -- identidade do processo (hostname+task-id do Swarm)
+    worker_id     text,                    -- identidade do processo (hostname + task/container id)
     grpc_addr     text,                    -- endereço gRPC do worker na overlay network
     generation    bigint NOT NULL DEFAULT 0, -- fencing token: incrementa a cada aquisição
     heartbeat_at  timestamptz,
@@ -126,7 +126,7 @@ RETURNING generation;
 - **Failover:** worker morre → heartbeats param → após 30s os leases ficam elegíveis → os workers vivos os adquirem no ciclo de reconciliação e reconectam as sessões. Downtime por sessão: ~30–60s, sem intervenção manual.
 - **Fencing:** o `generation` acompanha toda chamada gRPC e todo evento emitido; um worker que perdeu o lease (ex.: pausa longa de GC) tem suas operações rejeitadas ao comparar generations — nunca há dois donos efetivos.
 - **Reconciliação:** a cada 15s cada worker compara sua capacidade com os leases disponíveis e adquire sessões órfãs até o limite (`MAX_SESSIONS_PER_WORKER`). Distribuição emergente, sem coordenador central — suficiente para a escala alvo de centenas de sessões.
-- **Shutdown gracioso (deploy):** ao receber SIGTERM o worker marca-se como draining, solta os leases (worker_id = NULL, heartbeat_at = NULL), desconecta as sessões de forma limpa e os demais workers as adotam em segundos. Rolling update do Swarm com `stop_grace_period` folgado.
+- **Shutdown gracioso (deploy):** ao receber SIGTERM o worker marca-se como draining, solta os leases (worker_id = NULL, heartbeat_at = NULL), desconecta as sessões de forma limpa e os demais workers as adotam em segundos. Rolling update (Swarm) ou recriação de container (Compose), em ambos com `stop_grace_period` folgado.
 
 ## Fluxos principais
 
@@ -181,9 +181,14 @@ A task `webhook:deliver` resolve a configuração de webhook **da instância** (
 3. Worker recebe os eventos `QR` do hypermeow → publica no canal Redis → api entrega pelo WebSocket.
 4. `PairSuccess` → worker persiste, emite evento de conexão estabelecida.
 
-## Topologia no Swarm
+## Topologia de deploy
 
-| Service | Réplicas | Placement | Observações |
+A entrega inicial suporta dois alvos com os mesmos serviços:
+
+- **Docker Swarm** (`deploy/stack.yml`) — operação multi-node; topologia na tabela abaixo.
+- **Docker Compose** (`deploy/docker-compose.yml`) — host único, para quem precisa de menos infra; placement constraints não se aplicam, os volumes são locais nomeados e a rede interna é uma bridge privada.
+
+| Service | Réplicas | Placement (Swarm) | Observações |
 | --- | --- | --- | --- |
 | traefik | 1–2 | nodes de borda | TLS, sticky p/ WS |
 | api | 2+ | qualquer node | stateless |
@@ -193,8 +198,8 @@ A task `webhook:deliver` resolve a configuração de webhook **da instância** (
 | redis | 1 | node com volume | AOF ligado (filas asynq) |
 | minio | 1 | node com volume | lifecycle policies |
 
-- Toda comunicação interna (gRPC, Postgres, Redis) trafega em **overlay network** privada; só o Traefik publica portas.
-- O gRPC dos workers **não** usa o VIP do Swarm — a api disca o `grpc_addr` específico registrado no lease (endereço do task na overlay), porque o destinatário precisa ser o dono da sessão, não um worker qualquer.
+- Toda comunicação interna (gRPC, Postgres, Redis) trafega em **rede Docker privada** (overlay no Swarm; bridge no Compose); só o Traefik publica portas.
+- O gRPC dos workers **não** usa VIP nem nome de service com balanceamento — a api disca o `grpc_addr` específico registrado no lease (endereço do task/container na rede interna), porque o destinatário precisa ser o dono da sessão, não um worker qualquer.
 
 ## Estrutura de diretórios proposta
 
@@ -213,7 +218,7 @@ zappermeow/
 │   └── config/              # env + secrets
 ├── proto/                   # contratos gRPC api↔worker
 ├── migrations/              # golang-migrate (só tabelas da API)
-└── deploy/                  # stack.yml do Swarm, Dockerfile
+└── deploy/                  # stack.yml (Swarm), docker-compose.yml (Compose), Dockerfile
 ```
 
 ## Decisões e razões (resumo)

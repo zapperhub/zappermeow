@@ -20,13 +20,13 @@ Stack tecnológica da **zappermeow** — API RESTful multi-tenant sobre a biblio
 | Autenticação | API Key por instância + JWT (admin da plataforma e do tenant) |
 | Armazenamento de mídia | MinIO (S3-compatible) |
 | Entrega de eventos | Webhooks HTTP (HMAC) + WebSocket |
-| Configuração | Env vars (caarlos0/env) + Swarm Secrets |
+| Configuração | Env vars (caarlos0/env) + secrets do runtime de deploy |
 | Logs / métricas / traces | log/slog + Prometheus + OpenTelemetry |
 | Testes | testify + testcontainers-go |
 | CI/CD | GitHub Actions (golangci-lint, testes, build de imagem) |
-| Orquestração | Docker Swarm |
+| Orquestração / deploy | Docker Swarm (`stack.yml`) ou Docker Compose (`docker-compose.yml`) |
 | Proxy / TLS | Traefik |
-| Secrets | Docker Swarm Secrets |
+| Secrets | Swarm Secrets (Swarm) / file-based secrets (Compose) |
 
 ## Backend
 
@@ -38,6 +38,48 @@ Router minimalista 100% compatível com `net/http`, zero dependências. Todo o e
 
 ### huma (camada de API + OpenAPI)
 Montado sobre o chi. Handlers Go tipados geram automaticamente a spec **OpenAPI 3.1** com validação de request embutida — a documentação nunca dessincroniza do código. Serve a spec e o UI de documentação na própria API.
+
+## Padrões da API
+
+Como a API RESTful é o "frontend" do produto, o formato das respostas é contrato rígido — nenhum handler monta resposta de sucesso ou de erro manualmente.
+
+### Envelope de resposta
+
+Toda resposta JSON de **sucesso** com corpo usa envelope padrão, com campos alinhados à semântica da RFC 9457: `status` carrega o **código HTTP numérico** da resposta (mesma semântica do membro `status` dos problem details), nunca strings como `"success"`/`"error"`:
+
+```json
+{
+  "status": 200,
+  "data": {},
+  "timestamp": "2026-08-12T22:00:00.000Z"
+}
+```
+
+**Erros** seguem a **RFC 9457** (*Problem Details for HTTP APIs*, `application/problem+json`) — formato nativo do huma —, estendida com o membro `code`:
+
+```json
+{
+  "type": "https://zappermeow.dev/errors/validation",
+  "title": "Unprocessable Entity",
+  "status": 422,
+  "detail": "Request validation failed",
+  "code": "VALIDATION_ERROR",
+  "errors": [
+    { "message": "expected length >= 8", "location": "body.password" }
+  ],
+  "timestamp": "2026-08-12T22:00:00.000Z"
+}
+```
+
+Regras:
+
+- Clientes distinguem sucesso e erro pelo status HTTP e pelo `Content-Type` (`application/json` vs `application/problem+json`); o membro `status` espelha o código HTTP nos dois formatos, como define a RFC 9457.
+- `code` é **estável e único** por tipo de erro — contrato para clientes tratarem erros programaticamente. O catálogo de códigos vive no contrato de cada feature.
+- `title`, `detail` e `message` são descrições legíveis em **inglês**, voltadas ao desenvolvedor; consumidores traduzem a partir do `code`.
+- `errors[]` (extensão nativa do huma) carrega os detalhes por campo em erros de validação, com `location` apontando o campo (`body.name`). O membro `value` do huma é suprimido em campos sensíveis — respostas de erro **nunca** ecoam senhas ou segredos.
+- Status HTTP adequado a cada erro (`400`, `401`, `403`, `404`, `409`, `422`, `429`, `5xx`); o mapeamento de erros de domínio → problem details é centralizado (pacote `httperr`), mantendo o domínio desacoplado do transporte.
+- No huma: o envelope de sucesso entra como struct genérica nos outputs tipados (aparece fielmente na spec OpenAPI gerada); os erros customizam `huma.NewError` para adicionar `code` e `timestamp` ao modelo padrão.
+- Fora do envelope apenas: respostas sem corpo (`204 No Content`) e formatos não-JSON (`/metrics` em texto Prometheus).
 
 ## Dados
 
@@ -72,13 +114,13 @@ Algoritmo GCRA no Redis via middleware chi, com limites por API key (= por inst�
 ### Webhooks assinados
 Payloads de webhook assinados com HMAC-SHA256 (segredo por webhook de instância) para o consumidor validar a origem.
 
-### Swarm Secrets
-Credenciais de banco, chaves HMAC e signing keys de JWT via Docker Swarm Secrets — criptografados no Raft, montados em `/run/secrets`, invisíveis em `docker inspect`. A camada de config lê os arquivos de secret com fallback para env vars em desenvolvimento.
+### Secrets (Swarm e Compose)
+Credenciais de banco, chaves HMAC e signing keys de JWT via secrets do runtime de deploy. No Swarm, Docker Swarm Secrets — criptografados no Raft, invisíveis em `docker inspect`. No Compose, file-based secrets (`secrets:` apontando para arquivos locais). Em ambos os casos os secrets são montados em `/run/secrets`, então a camada de config é idêntica nos dois alvos: lê os arquivos de secret com fallback para env vars em desenvolvimento.
 
 ## Mídia
 
 ### MinIO
-Object storage S3-compatible rodando como serviço no próprio Swarm. Mídias recebidas/enviadas são persistidas com chave prefixada por tenant/instância, servidas por URLs pré-assinadas e expiradas por lifecycle policy. Se a operação migrar para nuvem, a troca por S3/R2 é transparente (mesma API).
+Object storage S3-compatible rodando como serviço na própria stack (Swarm ou Compose). Mídias recebidas/enviadas são persistidas com chave prefixada por tenant/instância, servidas por URLs pré-assinadas e expiradas por lifecycle policy. Se a operação migrar para nuvem, a troca por S3/R2 é transparente (mesma API).
 
 ## Eventos para os tenants
 
@@ -89,7 +131,7 @@ Dois canais complementares, alimentados pelos ~75 tipos de eventos do HyperMeow:
 
 ## Configuração
 
-**12-factor**: toda configuração via variáveis de ambiente, parseadas em struct tipada com `caarlos0/env` (biblioteca mínima, sem árvore de dependências). `.env` apenas em desenvolvimento local; em produção, valores sensíveis vêm de Swarm Secrets.
+**12-factor**: toda configuração via variáveis de ambiente, parseadas em struct tipada com `caarlos0/env` (biblioteca mínima, sem árvore de dependências). `.env` apenas em desenvolvimento local; em produção, valores sensíveis vêm de secrets do runtime de deploy (Swarm Secrets ou file-based secrets do Compose), montados em `/run/secrets`.
 
 ## Observabilidade
 
@@ -108,19 +150,22 @@ Coletores (Grafana, Jaeger, etc.) ficam fora do escopo da API — ela apenas exp
 
 ## Runtime e deploy
 
-### Docker Swarm
-Orquestração via Docker Swarm desde o início: `docker stack deploy` com a stack completa (api, workers asynq, postgres, redis, minio, traefik), overlay networks, secrets nativos e rolling updates.
+### Docker Swarm e Docker Compose
+A entrega inicial suporta **dois alvos de deploy** com paridade funcional — mesma imagem, mesmos serviços (api, session-worker, jobs, postgres, redis, minio, traefik):
 
-**Implicação arquitetural importante — sessões são stateful:** cada instância WhatsApp mantém um WebSocket persistente com estado criptográfico; uma sessão deve estar ativa em **exatamente um processo** por vez. No Swarm isso significa:
+- **Docker Swarm** (`deploy/stack.yml`): operação multi-node — `docker stack deploy` com overlay networks, secrets nativos e rolling updates.
+- **Docker Compose** (`deploy/docker-compose.yml`): host único — `docker compose up -d`, para usuários que precisam de menos infra e para facilitar a avaliação e distribuição do projeto.
+
+**Implicação arquitetural importante — sessões são stateful:** cada instância WhatsApp mantém um WebSocket persistente com estado criptográfico; uma sessão deve estar ativa em **exatamente um processo** por vez. Em qualquer dos alvos isso significa:
 
 - Separar o serviço **api** (stateless, escala horizontal livre) do serviço **session-worker** (dono das conexões WhatsApp).
 - Garantir posse exclusiva de cada sessão (lease/lock em Postgres ou Redis) para que duas réplicas nunca conectem o mesmo device.
-- Postgres, Redis e MinIO com placement constraints em nodes com volume persistente.
+- Postgres, Redis e MinIO com volume persistente — no Swarm, placement constraints em nodes com volume; no Compose, volumes locais nomeados.
 
 A imagem é multi-stage (builder → distroless), resultando em ~20 MB.
 
 ### Traefik
-Proxy de borda com integração nativa ao Swarm: service discovery por labels, TLS automático via Let's Encrypt, load balancing entre réplicas da API e sticky sessions para os WebSockets.
+Proxy de borda com integração nativa ao Docker (providers Swarm e Compose): service discovery por labels, TLS automático via Let's Encrypt, load balancing entre réplicas da API e sticky sessions para os WebSockets.
 
 ## Dependências principais (resumo)
 
