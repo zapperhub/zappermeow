@@ -22,6 +22,13 @@ const (
 	CodeRateLimitExceeded      Code = "RATE_LIMIT_EXCEEDED"
 	CodeInternal               Code = "INTERNAL_ERROR"
 
+	// Connection codes (feature 002). Each is contract: clients branch on them.
+	CodeInstanceNotPaired  Code = "INSTANCE_NOT_PAIRED"
+	CodeAlreadyPaired      Code = "ALREADY_PAIRED"
+	CodePairingInProgress  Code = "PAIRING_IN_PROGRESS"
+	CodeInvalidPhoneNumber Code = "INVALID_PHONE_NUMBER"
+	CodeSessionUnavailable Code = "SESSION_UNAVAILABLE"
+
 	// Codes below cover the protocol-level refusals the framework raises before
 	// a handler is ever reached. They are part of the published catalogue: a
 	// client must be able to tell "you sent the wrong media type" apart from
@@ -154,4 +161,37 @@ func ErrRateLimited() *Error {
 // ErrInternal wraps an unexpected failure; the cause never reaches the client.
 func ErrInternal(cause error) *Error {
 	return &Error{Code: CodeInternal, Detail: "Internal server error", cause: cause}
+}
+
+// ErrInstanceNotPaired rejects an operation that needs saved session material
+// on an instance that has none.
+func ErrInstanceNotPaired() *Error {
+	return &Error{Code: CodeInstanceNotPaired, Detail: "Instance is not paired with WhatsApp"}
+}
+
+// ErrAlreadyPaired rejects a pairing attempt on an instance that already holds
+// session material; logging out first is the deliberate step.
+func ErrAlreadyPaired() *Error {
+	return &Error{Code: CodeAlreadyPaired, Detail: "Instance already has a paired device"}
+}
+
+// ErrPairingInProgress reports an attempt already in flight when the caller
+// asked not to replace it.
+func ErrPairingInProgress() *Error {
+	return &Error{Code: CodePairingInProgress, Detail: "A pairing attempt is already in progress"}
+}
+
+// ErrInvalidPhoneNumber rejects a number WhatsApp would refuse anyway.
+func ErrInvalidPhoneNumber() *Error {
+	return &Error{
+		Code:   CodeInvalidPhoneNumber,
+		Detail: "Phone number must be in international format without a leading plus or zero",
+		Fields: []FieldError{{Location: "body.phone_number", Message: "invalid international phone number"}},
+	}
+}
+
+// ErrSessionUnavailable reports that no worker could serve the command right
+// now — a deploy, a failover, or a fleet with no spare capacity.
+func ErrSessionUnavailable() *Error {
+	return &Error{Code: CodeSessionUnavailable, Detail: "No session worker is available to serve this command"}
 }

@@ -1,0 +1,16 @@
+version: v2
+managed:
+  enabled: false
+plugins:
+  # Both plugins come from the go.mod tool directives, so the generated output
+  # is reproducible from the module graph alone — no system protoc required.
+  # `module` strips the module prefix from go_package, landing the files at
+  # internal/pb/sessionv1 instead of mirroring the proto directory tree.
+  - local: ["go", "tool", "protoc-gen-go"]
+    out: ..
+    opt: module=github.com/zapperhub/zappermeow
+  - local: ["go", "tool", "protoc-gen-go-grpc"]
+    out: ..
+    opt: module=github.com/zapperhub/zappermeow
+inputs:
+  - directory: .

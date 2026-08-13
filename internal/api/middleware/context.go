@@ -19,6 +19,7 @@ const (
 	keyAdmin
 	keyOperator
 	keyClientIP
+	connectionPrincipalKey
 )
 
 // WithTenantID tags the request context with the tenant it acts upon, which the
@@ -92,4 +93,16 @@ func WithOperator(ctx context.Context, operator Operator) context.Context {
 func OperatorFrom(ctx context.Context) (Operator, bool) {
 	operator, ok := ctx.Value(keyOperator).(Operator)
 	return operator, ok
+}
+
+// WithConnectionPrincipal stores who is driving a connection route.
+func WithConnectionPrincipal(ctx context.Context, principal ConnectionPrincipal) context.Context {
+	return context.WithValue(ctx, connectionPrincipalKey, principal)
+}
+
+// ConnectionPrincipalFrom reads the principal placed by the connection
+// middleware.
+func ConnectionPrincipalFrom(ctx context.Context) (ConnectionPrincipal, bool) {
+	principal, ok := ctx.Value(connectionPrincipalKey).(ConnectionPrincipal)
+	return principal, ok
 }

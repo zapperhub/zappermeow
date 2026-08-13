@@ -47,6 +47,17 @@ jobs:
             exit 1
           }
 
+      # Diferente do sqlc, aqui não há binário externo para baixar: o compilador
+      # (buf) e os plugins são tool directives do go.mod, então a versão está
+      # fixada pelo módulo e a geração é reproduzível a partir dele.
+      - name: Verify generated protobuf is current
+        run: |
+          go generate ./proto/...
+          git diff --exit-code -- internal/pb || {
+            echo "::error::protobuf output is stale; run 'go generate ./proto/...' and commit the result"
+            exit 1
+          }
+
       # v9 do action instala o golangci-lint v2 (formato do .golangci.yml daqui).
       # A versão é fixada porque o binário precisa ser compilado com Go >= 1.25
       # para analisar um módulo que declara `go 1.25.0`.

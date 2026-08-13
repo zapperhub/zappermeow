@@ -7,6 +7,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/mail"
 	"os"
 	"path/filepath"
@@ -52,6 +53,36 @@ type Config struct {
 	OTelEnabled bool `env:"OTEL_ENABLED" envDefault:"false"`
 
 	SecretsDir string `env:"SECRETS_DIR" envDefault:"/run/secrets"`
+
+	// --- session-worker (stateful plane) ---
+
+	// WorkerGRPCListenAddr is where the worker serves the private SessionService;
+	// WorkerAdvertiseAddr is what it registers in the lease for the API to dial.
+	// They differ whenever the process binds a wildcard but must be reached at a
+	// routable address (containers, overlay networks).
+	WorkerGRPCListenAddr string `env:"WORKER_GRPC_LISTEN_ADDR" envDefault:":9090"`
+	WorkerAdvertiseAddr  string `env:"WORKER_ADVERTISE_ADDR"`
+
+	// MaxSessionsPerWorker caps how many leases one worker adopts. This is an
+	// operational sizing knob, never a product quota: the platform imposes no
+	// ceiling on instances, and capacity is the self-hoster's call (constitution
+	// v2.4.0, Principle II).
+	MaxSessionsPerWorker int `env:"MAX_SESSIONS_PER_WORKER" envDefault:"200"`
+
+	// PairingWindow is an upper bound only. The real window is dictated by the
+	// WhatsApp server, which sends a finite list of QR codes (~160s in total);
+	// this value can cut a pairing attempt short, never extend it (research R2).
+	PairingWindow time.Duration `env:"PAIRING_WINDOW" envDefault:"180s"`
+
+	// Lease timings. Expiry must stay comfortably above the heartbeat interval,
+	// or a slow heartbeat would hand a live session to a second owner — the one
+	// thing Principle III forbids.
+	LeaseHeartbeatInterval time.Duration `env:"LEASE_HEARTBEAT_INTERVAL" envDefault:"10s"`
+	LeaseExpiry            time.Duration `env:"LEASE_EXPIRY" envDefault:"30s"`
+	ReconcileInterval      time.Duration `env:"RECONCILE_INTERVAL" envDefault:"15s"`
+
+	// ConnectionEventsRetention bounds the connection trail (FR-037).
+	ConnectionEventsRetention time.Duration `env:"CONNECTION_EVENTS_RETENTION" envDefault:"720h"`
 }
 
 // secretFiles maps a file name under SecretsDir to the field it overrides.
@@ -140,6 +171,27 @@ func (c *Config) Validate() error {
 	if c.OperationalRateLimit < 1 {
 		problems = append(problems, envPrefix+"OP_RATE_LIMIT must be at least 1")
 	}
+	if c.MaxSessionsPerWorker < 1 {
+		problems = append(problems, envPrefix+"MAX_SESSIONS_PER_WORKER must be at least 1")
+	}
+	if c.PairingWindow <= 0 {
+		problems = append(problems, envPrefix+"PAIRING_WINDOW must be positive")
+	}
+	if c.LeaseHeartbeatInterval <= 0 {
+		problems = append(problems, envPrefix+"LEASE_HEARTBEAT_INTERVAL must be positive")
+	}
+	// A lease that expires before the owner can renew it would be stolen from a
+	// healthy worker, producing exactly the double ownership the lease exists to
+	// prevent. Three heartbeats of slack tolerates a missed tick plus jitter.
+	if c.LeaseExpiry < 3*c.LeaseHeartbeatInterval {
+		problems = append(problems, fmt.Sprintf("%sLEASE_EXPIRY must be at least 3x %sLEASE_HEARTBEAT_INTERVAL", envPrefix, envPrefix))
+	}
+	if c.ReconcileInterval <= 0 {
+		problems = append(problems, envPrefix+"RECONCILE_INTERVAL must be positive")
+	}
+	if c.ConnectionEventsRetention <= 0 {
+		problems = append(problems, envPrefix+"CONNECTION_EVENTS_RETENTION must be positive")
+	}
 	if c.BootstrapEmail != "" {
 		if _, err := mail.ParseAddress(c.BootstrapEmail); err != nil {
 			problems = append(problems, envPrefix+"BOOTSTRAP_EMAIL is not a valid email address")
@@ -162,3 +214,23 @@ func (c *Config) BootstrapConfigured() bool {
 
 // SlogLevel maps the configured level name onto slog's levels.
 func (c *Config) SlogLevel() string { return strings.ToLower(c.LogLevel) }
+
+// WorkerAdvertise resolves the address the worker registers in its leases. When
+// unset it falls back to the container hostname joined with the listen port,
+// which is routable on the Docker network of both deploy targets. The API dials
+// this address directly — it must never resolve to a load-balanced VIP, or a
+// command could reach a process that does not own the session.
+func (c *Config) WorkerAdvertise() (string, error) {
+	if addr := strings.TrimSpace(c.WorkerAdvertiseAddr); addr != "" {
+		return addr, nil
+	}
+	_, port, err := net.SplitHostPort(c.WorkerGRPCListenAddr)
+	if err != nil {
+		return "", fmt.Errorf("derive advertise address from %q: %w", c.WorkerGRPCListenAddr, err)
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("derive advertise address: %w", err)
+	}
+	return net.JoinHostPort(host, port), nil
+}

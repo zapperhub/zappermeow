@@ -4,9 +4,12 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -59,4 +62,15 @@ func NewRedis(ctx context.Context, opts RedisOptions) (*redis.Client, error) {
 		return nil, fmt.Errorf("ping redis: %w", err)
 	}
 	return client, nil
+}
+
+// IsNoRows reports whether err is pgx's "no rows" sentinel. Callers use it to
+// tell "nothing matched" apart from a real database failure — for the lease,
+// that is the difference between losing a race and being unable to run at all.
+func IsNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
+
+// Interval converts a Go duration into the pgtype value sqlc expects for SQL
+// interval parameters.
+func Interval(d time.Duration) pgtype.Interval {
+	return pgtype.Interval{Microseconds: d.Microseconds(), Valid: true}
 }

@@ -24,6 +24,19 @@ type InstanceService struct {
 	pool     *pgxpool.Pool
 	queries  *store.Queries
 	recorder *EventRecorder
+	sessions SessionTerminator
+}
+
+// SessionTerminator ends a session before its instance is removed. It is
+// optional: a deployment without a worker fleet has no session to end.
+type SessionTerminator interface {
+	Terminate(ctx context.Context, instanceID domain.ID) error
+}
+
+// WithSessions gives the service a way to end sessions on deletion.
+func (s *InstanceService) WithSessions(terminator SessionTerminator) *InstanceService {
+	s.sessions = terminator
+	return s
 }
 
 // NewInstanceService builds the instance use cases.
@@ -183,6 +196,15 @@ type DeleteInstanceInput struct {
 // The cascade is audited on the parent event with the number of keys removed;
 // there are no per-key events (research R9).
 func (s *InstanceService) Delete(ctx context.Context, in DeleteInstanceInput) error {
+	// The session goes first: removing the row while a worker still holds the
+	// device would leave a companion device linked on the customer's handset
+	// and a session nobody owns (FR-007). A failure here is logged by the
+	// terminator and does not block the deletion — the tenant asked for the
+	// instance to be gone, and the alternative is a record they cannot remove.
+	if s.sessions != nil {
+		_ = s.sessions.Terminate(ctx, in.InstanceID)
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return domain.ErrInternal(err)

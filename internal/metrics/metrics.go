@@ -66,6 +66,9 @@ const (
 const (
 	ScopeLogin       = "login_origin"
 	ScopeOperational = "operational_key"
+	// ScopeConnection covers the routes that drive a session, which accept
+	// either credential and are therefore keyed by whichever was presented.
+	ScopeConnection = "connection"
 )
 
 func init() {

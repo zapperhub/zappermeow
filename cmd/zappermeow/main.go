@@ -32,7 +32,7 @@ func run() error {
 	case "serve":
 		return runServe(ctx)
 	case "session-worker":
-		return errors.New("session-worker: not implemented in this release")
+		return runSessionWorker(ctx)
 	case "jobs":
 		return errors.New("jobs: not implemented in this release")
 	case "help", "-h", "--help":
@@ -52,7 +52,7 @@ Usage:
 
 Commands:
   serve            Run the stateless REST API
-  session-worker   Run the stateful WhatsApp session worker (not implemented)
+  session-worker   Run the stateful WhatsApp session worker
   jobs             Run the asynq job consumers (not implemented)
   help             Show this message
 `)

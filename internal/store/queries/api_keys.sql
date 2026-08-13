@@ -29,7 +29,7 @@ RETURNING k.id, k.instance_id, k.label, k.key_prefix, k.status, k.created_at, k.
 -- owning tenant. Status columns come back raw so the caller can tell "revoked"
 -- apart from "wrong instance" apart from "suspended tenant".
 SELECT k.id AS key_id, k.instance_id, k.label, k.key_prefix, k.status AS key_status,
-       i.name AS instance_name, i.state AS instance_state,
+       i.name AS instance_name, i.connection_state AS instance_state,
        t.id AS tenant_id, t.status AS tenant_status
 FROM api_keys k
 JOIN instances i ON i.id = k.instance_id

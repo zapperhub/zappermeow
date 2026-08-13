@@ -160,3 +160,85 @@ func TestValidateDoesNotEchoSecrets(t *testing.T) {
 	assert.NotContains(t, err.Error(), "short-but-secret-key")
 	assert.NotContains(t, err.Error(), "sup3rs3cr3t")
 }
+
+func TestLoadAppliesSessionWorkerDefaults(t *testing.T) {
+	setMinimalEnv(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, ":9090", cfg.WorkerGRPCListenAddr)
+	assert.Equal(t, 200, cfg.MaxSessionsPerWorker, "sizing knob, not a product quota")
+	assert.Equal(t, 180*time.Second, cfg.PairingWindow)
+	assert.Equal(t, 10*time.Second, cfg.LeaseHeartbeatInterval)
+	assert.Equal(t, 30*time.Second, cfg.LeaseExpiry)
+	assert.Equal(t, 15*time.Second, cfg.ReconcileInterval)
+	assert.Equal(t, 720*time.Hour, cfg.ConnectionEventsRetention, "30 days of connection trail")
+}
+
+func TestLoadReadsSessionWorkerOverrides(t *testing.T) {
+	setMinimalEnv(t)
+	t.Setenv("ZAPPERMEOW_WORKER_GRPC_LISTEN_ADDR", "0.0.0.0:7000")
+	t.Setenv("ZAPPERMEOW_WORKER_ADVERTISE_ADDR", "worker-1.internal:7000")
+	t.Setenv("ZAPPERMEOW_MAX_SESSIONS_PER_WORKER", "50")
+	t.Setenv("ZAPPERMEOW_PAIRING_WINDOW", "90s")
+	t.Setenv("ZAPPERMEOW_CONNECTION_EVENTS_RETENTION", "168h")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	assert.Equal(t, "0.0.0.0:7000", cfg.WorkerGRPCListenAddr)
+	assert.Equal(t, 50, cfg.MaxSessionsPerWorker)
+	assert.Equal(t, 90*time.Second, cfg.PairingWindow)
+	assert.Equal(t, 168*time.Hour, cfg.ConnectionEventsRetention)
+
+	advertise, err := cfg.WorkerAdvertise()
+	require.NoError(t, err)
+	assert.Equal(t, "worker-1.internal:7000", advertise)
+}
+
+// A lease that expires before its owner can renew it would be handed to a
+// second worker while the first is still connected — the double ownership
+// Principle III forbids. The configuration must refuse that shape outright.
+func TestValidateRejectsLeaseExpiryTooCloseToHeartbeat(t *testing.T) {
+	setMinimalEnv(t)
+	t.Setenv("ZAPPERMEOW_LEASE_HEARTBEAT_INTERVAL", "10s")
+	t.Setenv("ZAPPERMEOW_LEASE_EXPIRY", "20s")
+
+	_, err := Load()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "LEASE_EXPIRY must be at least 3x")
+}
+
+func TestValidateRejectsNonPositiveWorkerDurations(t *testing.T) {
+	for _, tc := range []struct{ env, want string }{
+		{"ZAPPERMEOW_PAIRING_WINDOW", "PAIRING_WINDOW must be positive"},
+		{"ZAPPERMEOW_RECONCILE_INTERVAL", "RECONCILE_INTERVAL must be positive"},
+		{"ZAPPERMEOW_CONNECTION_EVENTS_RETENTION", "CONNECTION_EVENTS_RETENTION must be positive"},
+	} {
+		t.Run(tc.env, func(t *testing.T) {
+			setMinimalEnv(t)
+			t.Setenv(tc.env, "0s")
+
+			_, err := Load()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+// Without an explicit advertise address the worker falls back to its hostname,
+// which is what makes the default work unchanged inside a container.
+func TestWorkerAdvertiseFallsBackToHostname(t *testing.T) {
+	setMinimalEnv(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+
+	advertise, err := cfg.WorkerAdvertise()
+	require.NoError(t, err)
+
+	host, err := os.Hostname()
+	require.NoError(t, err)
+	assert.Equal(t, host+":9090", advertise)
+}

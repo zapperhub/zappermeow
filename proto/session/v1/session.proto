@@ -1,0 +1,124 @@
+// Internal contract between the stateless API and the stateful session worker.
+//
+// It travels only on the private network (overlay on Swarm, bridge on Compose).
+// The API dials the grpc_addr registered in the lease, never a load-balanced
+// VIP: the destination must be the exact process that owns the session.
+syntax = "proto3";
+
+package zappermeow.session.v1;
+
+option go_package = "github.com/zapperhub/zappermeow/internal/pb/sessionv1;sessionv1";
+
+import "google/protobuf/timestamp.proto";
+
+service SessionService {
+  // Brings the session up: pairs when there is no device material, reconnects
+  // when there is.
+  rpc Connect(ConnectRequest) returns (ConnectResponse);
+
+  // Starts a phone-code pairing attempt and returns the code to type on the
+  // handset.
+  rpc PairPhone(PairPhoneRequest) returns (PairPhoneResponse);
+
+  // Takes the session offline while keeping the device material.
+  rpc Disconnect(DisconnectRequest) returns (DisconnectResponse);
+
+  // Ends the session on WhatsApp, removes the companion device and deletes the
+  // local material.
+  rpc Logout(LogoutRequest) returns (LogoutResponse);
+
+  // Live view held by the owner; complements the persisted state.
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+}
+
+// Fence carries the caller's view of who owns the session. The worker compares
+// generation against the lease it holds and refuses anything stale, so a
+// process that lost ownership can never act on the session.
+message Fence {
+  string instance_id = 1; // UUID
+  int64 generation = 2;   // lease generation known to the API
+}
+
+enum SessionState {
+  SESSION_STATE_UNSPECIFIED = 0;
+  SESSION_STATE_REGISTERED = 1;
+  SESSION_STATE_PAIRING = 2;
+  SESSION_STATE_CONNECTING = 3;
+  SESSION_STATE_CONNECTED = 4;
+  SESSION_STATE_DISCONNECTED = 5;
+  SESSION_STATE_LOGGED_OUT = 6;
+  SESSION_STATE_BANNED = 7;
+}
+
+enum PairingMethod {
+  PAIRING_METHOD_UNSPECIFIED = 0;
+  PAIRING_METHOD_QR = 1;
+  PAIRING_METHOD_PHONE = 2;
+}
+
+// DeviceIdentity is one companion device. The JID keeps its device suffix: that
+// suffix is what distinguishes two instances paired to the same phone number.
+message DeviceIdentity {
+  string jid = 1;
+  string lid = 2;
+  string phone_number = 3;
+  string push_name = 4;
+  string platform = 5;
+  string business_name = 6;
+}
+
+message ConnectRequest {
+  Fence fence = 1;
+}
+
+message ConnectResponse {
+  SessionState state = 1;
+  bool pairing_started = 2;
+  google.protobuf.Timestamp pairing_expires_at = 3;
+}
+
+message PairPhoneRequest {
+  Fence fence = 1;
+  string phone_number = 2;  // E.164 without '+'
+  bool replace_active = 3;  // ends an attempt already in flight
+}
+
+message PairPhoneResponse {
+  string pairing_code = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+message DisconnectRequest {
+  Fence fence = 1;
+}
+
+message DisconnectResponse {
+  SessionState state = 1;
+}
+
+message LogoutRequest {
+  Fence fence = 1;
+  // Allows connecting briefly to remove the device on the server before
+  // deleting the local material.
+  bool allow_temporary_connect = 2;
+}
+
+message LogoutResponse {
+  SessionState state = 1;
+  // false means only the local material was deleted: the device may still be
+  // listed on the customer's handset.
+  bool remote_removed = 2;
+}
+
+message GetStatusRequest {
+  Fence fence = 1;
+}
+
+message GetStatusResponse {
+  SessionState state = 1;
+  DeviceIdentity device = 2;
+  bool connected = 3;
+  bool logged_in = 4;
+  PairingMethod pairing_method = 5;
+  google.protobuf.Timestamp connected_at = 6;
+}

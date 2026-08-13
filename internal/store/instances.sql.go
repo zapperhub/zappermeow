@@ -24,9 +24,9 @@ func (q *Queries) CountKeysByInstance(ctx context.Context, instanceID uuid.UUID)
 
 const createInstance = `-- name: CreateInstance :one
 
-INSERT INTO instances (id, tenant_id, name, state, created_at, updated_at)
+INSERT INTO instances (id, tenant_id, name, connection_state, created_at, updated_at)
 VALUES ($1, $2, $3, 'registered', now(), now())
-RETURNING id, tenant_id, name, state, created_at, updated_at
+RETURNING id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at
 `
 
 type CreateInstanceParams struct {
@@ -44,9 +44,21 @@ func (q *Queries) CreateInstance(ctx context.Context, arg CreateInstanceParams) 
 		&i.ID,
 		&i.TenantID,
 		&i.Name,
-		&i.State,
+		&i.ConnectionState,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ConnectionIntent,
+		&i.WaJid,
+		&i.WaLid,
+		&i.PhoneNumber,
+		&i.PushName,
+		&i.Platform,
+		&i.BusinessName,
+		&i.PairedAt,
+		&i.ConnectedAt,
+		&i.LastDisconnectAt,
+		&i.LastDisconnectReason,
+		&i.BanExpiresAt,
 	)
 	return i, err
 }
@@ -54,7 +66,7 @@ func (q *Queries) CreateInstance(ctx context.Context, arg CreateInstanceParams) 
 const deleteInstance = `-- name: DeleteInstance :one
 DELETE FROM instances
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, name, state, created_at, updated_at
+RETURNING id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at
 `
 
 type DeleteInstanceParams struct {
@@ -71,15 +83,27 @@ func (q *Queries) DeleteInstance(ctx context.Context, arg DeleteInstanceParams) 
 		&i.ID,
 		&i.TenantID,
 		&i.Name,
-		&i.State,
+		&i.ConnectionState,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ConnectionIntent,
+		&i.WaJid,
+		&i.WaLid,
+		&i.PhoneNumber,
+		&i.PushName,
+		&i.Platform,
+		&i.BusinessName,
+		&i.PairedAt,
+		&i.ConnectedAt,
+		&i.LastDisconnectAt,
+		&i.LastDisconnectReason,
+		&i.BanExpiresAt,
 	)
 	return i, err
 }
 
 const getInstanceByIDAndTenant = `-- name: GetInstanceByIDAndTenant :one
-SELECT id, tenant_id, name, state, created_at, updated_at
+SELECT id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at
 FROM instances
 WHERE id = $1 AND tenant_id = $2
 `
@@ -96,15 +120,27 @@ func (q *Queries) GetInstanceByIDAndTenant(ctx context.Context, arg GetInstanceB
 		&i.ID,
 		&i.TenantID,
 		&i.Name,
-		&i.State,
+		&i.ConnectionState,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ConnectionIntent,
+		&i.WaJid,
+		&i.WaLid,
+		&i.PhoneNumber,
+		&i.PushName,
+		&i.Platform,
+		&i.BusinessName,
+		&i.PairedAt,
+		&i.ConnectedAt,
+		&i.LastDisconnectAt,
+		&i.LastDisconnectReason,
+		&i.BanExpiresAt,
 	)
 	return i, err
 }
 
 const listInstancesByTenant = `-- name: ListInstancesByTenant :many
-SELECT id, tenant_id, name, state, created_at, updated_at
+SELECT id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at
 FROM instances
 WHERE tenant_id = $1
 ORDER BY created_at
@@ -123,9 +159,21 @@ func (q *Queries) ListInstancesByTenant(ctx context.Context, tenantID uuid.UUID)
 			&i.ID,
 			&i.TenantID,
 			&i.Name,
-			&i.State,
+			&i.ConnectionState,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ConnectionIntent,
+			&i.WaJid,
+			&i.WaLid,
+			&i.PhoneNumber,
+			&i.PushName,
+			&i.Platform,
+			&i.BusinessName,
+			&i.PairedAt,
+			&i.ConnectedAt,
+			&i.LastDisconnectAt,
+			&i.LastDisconnectReason,
+			&i.BanExpiresAt,
 		); err != nil {
 			return nil, err
 		}
@@ -141,7 +189,7 @@ const renameInstance = `-- name: RenameInstance :one
 UPDATE instances
 SET name = $3, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, name, state, created_at, updated_at
+RETURNING id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at
 `
 
 type RenameInstanceParams struct {
@@ -157,9 +205,21 @@ func (q *Queries) RenameInstance(ctx context.Context, arg RenameInstanceParams) 
 		&i.ID,
 		&i.TenantID,
 		&i.Name,
-		&i.State,
+		&i.ConnectionState,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ConnectionIntent,
+		&i.WaJid,
+		&i.WaLid,
+		&i.PhoneNumber,
+		&i.PushName,
+		&i.Platform,
+		&i.BusinessName,
+		&i.PairedAt,
+		&i.ConnectedAt,
+		&i.LastDisconnectAt,
+		&i.LastDisconnectReason,
+		&i.BanExpiresAt,
 	)
 	return i, err
 }

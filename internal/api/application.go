@@ -8,7 +8,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/zapperhub/zappermeow/internal/api/sessionclient"
 	"github.com/zapperhub/zappermeow/internal/config"
+	"github.com/zapperhub/zappermeow/internal/events"
+	"github.com/zapperhub/zappermeow/internal/lease"
 	"github.com/zapperhub/zappermeow/internal/domain"
 	"github.com/zapperhub/zappermeow/internal/domain/services"
 	"github.com/zapperhub/zappermeow/internal/store"
@@ -49,15 +52,26 @@ func NewApplication(ctx context.Context, opts Options) (*Application, error) {
 		return nil, err
 	}
 
+	// The API reads leases but never acquires them: it only needs to know which
+	// worker owns a session in order to dial it.
+	leases := lease.New(queries, lease.Options{
+		WorkerID: "api",
+		Expiry:   cfg.LeaseExpiry,
+	})
+	sessions := sessionclient.New(leases, opts.Redis, logger)
+
 	server := NewServer(logger, cfg.TrustProxyHeaders)
 	server.RegisterRoutes(RouteDeps{
-		Config:   cfg,
-		Logger:   logger,
-		Pool:     opts.Pool,
-		Redis:    opts.Redis,
-		Queries:  queries,
-		Recorder: recorder,
-		Issuer:   issuer,
+		Config:    cfg,
+		Logger:    logger,
+		Pool:      opts.Pool,
+		Redis:     opts.Redis,
+		Queries:   queries,
+		Recorder:  recorder,
+		Issuer:    issuer,
+		Leases:    leases,
+		Sessions:  sessions,
+		Publisher: events.NewPublisher(opts.Redis),
 	})
 
 	return &Application{server: server}, nil

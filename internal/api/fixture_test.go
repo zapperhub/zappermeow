@@ -82,6 +82,17 @@ func bootApplication(t *testing.T, infra *testutil.Infra, mutators ...func(*conf
 		LockoutWindow:        15 * time.Minute,
 		LoginRateLimit:       1000,
 		OperationalRateLimit: 1000,
+
+		// Session-worker settings. The API never owns a session, but Validate()
+		// covers the whole configuration, so the fixture mirrors the documented
+		// defaults instead of leaving them at zero.
+		WorkerGRPCListenAddr:      ":9090",
+		MaxSessionsPerWorker:      200,
+		PairingWindow:             180 * time.Second,
+		LeaseHeartbeatInterval:    10 * time.Second,
+		LeaseExpiry:               30 * time.Second,
+		ReconcileInterval:         15 * time.Second,
+		ConnectionEventsRetention: 720 * time.Hour,
 	}
 	for _, mutate := range mutators {
 		mutate(cfg)

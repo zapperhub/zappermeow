@@ -22,13 +22,34 @@ type ApiKey struct {
 	RevokedAt  *time.Time
 }
 
+type ConnectionEvent struct {
+	ID         int64
+	InstanceID uuid.UUID
+	Type       string
+	Reason     *string
+	Detail     []byte
+	OccurredAt time.Time
+}
+
 type Instance struct {
-	ID        uuid.UUID
-	TenantID  uuid.UUID
-	Name      string
-	State     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID                   uuid.UUID
+	TenantID             uuid.UUID
+	Name                 string
+	ConnectionState      string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	ConnectionIntent     string
+	WaJid                *string
+	WaLid                *string
+	PhoneNumber          *string
+	PushName             *string
+	Platform             *string
+	BusinessName         *string
+	PairedAt             *time.Time
+	ConnectedAt          *time.Time
+	LastDisconnectAt     *time.Time
+	LastDisconnectReason *string
+	BanExpiresAt         *time.Time
 }
 
 type SecurityEvent struct {
@@ -41,6 +62,16 @@ type SecurityEvent struct {
 	SourceIp    *netip.Addr
 	Metadata    []byte
 	CreatedAt   time.Time
+}
+
+type SessionLease struct {
+	InstanceID   uuid.UUID
+	WorkerID     *string
+	GrpcAddr     *string
+	Generation   int64
+	HeartbeatAt  *time.Time
+	DesiredState string
+	UpdatedAt    time.Time
 }
 
 type Tenant struct {

@@ -70,7 +70,7 @@ func (q *Queries) CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (Cre
 
 const getKeyForAuth = `-- name: GetKeyForAuth :one
 SELECT k.id AS key_id, k.instance_id, k.label, k.key_prefix, k.status AS key_status,
-       i.name AS instance_name, i.state AS instance_state,
+       i.name AS instance_name, i.connection_state AS instance_state,
        t.id AS tenant_id, t.status AS tenant_status
 FROM api_keys k
 JOIN instances i ON i.id = k.instance_id

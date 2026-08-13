@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -64,6 +65,28 @@ func NewOperationalRateLimiter(api huma.API, client *redis.Client, perMinute int
 	}
 }
 
+// NewConnectionRateLimiter limits the routes that drive a session. They are
+// operational routes — an instance API key opens them — so the constitution
+// requires a distributed limit on every one of them. The bucket follows the
+// credential: per instance for a key, per tenant for an admin token, so neither
+// can spend the other's allowance.
+func NewConnectionRateLimiter(api huma.API, client *redis.Client, perMinute int, logger *slog.Logger) *RateLimiter {
+	return &RateLimiter{
+		api:     api,
+		limiter: redis_rate.NewLimiter(client),
+		limit:   redis_rate.PerMinute(perMinute),
+		scope:   metrics.ScopeConnection,
+		logger:  logger,
+		keyFor: func(ctx huma.Context) (string, bool) {
+			principal, ok := ConnectionPrincipalFrom(ctx.Context())
+			if !ok {
+				return "", false
+			}
+			return principal.RateLimitKey(), true
+		},
+	}
+}
+
 // Limit returns the middleware enforcing the allowance.
 func (l *RateLimiter) Limit() func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
@@ -89,4 +112,24 @@ func (l *RateLimiter) Limit() func(huma.Context, func(huma.Context)) {
 
 		next(ctx)
 	}
+}
+
+// AllowKey enforces the allowance outside huma, for handlers mounted directly
+// on chi — the WebSocket upgrade is one, and being outside the middleware chain
+// is exactly why it has to ask explicitly.
+//
+// It fails open for the same reason the middleware does: losing Redis must not
+// take the event channel down with it.
+func (l *RateLimiter) AllowKey(ctx context.Context, key string) bool {
+	result, err := l.limiter.Allow(ctx, key, l.limit)
+	if err != nil {
+		l.logger.Warn("rate limiter unavailable, allowing request",
+			slog.String("scope", l.scope), slog.String("error", err.Error()))
+		return true
+	}
+	if result.Allowed < 1 {
+		metrics.RateLimitRejections.WithLabelValues(l.scope).Inc()
+		return false
+	}
+	return true
 }

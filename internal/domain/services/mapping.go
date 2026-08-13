@@ -110,7 +110,7 @@ func instanceFromRow(row store.Instance) domain.Instance {
 		ID:        row.ID,
 		TenantID:  row.TenantID,
 		Name:      row.Name,
-		State:     domain.InstanceState(row.State),
+		State:     domain.InstanceState(row.ConnectionState),
 		CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt,
 	}

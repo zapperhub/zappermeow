@@ -137,6 +137,12 @@ func statusFor(code domain.Code) int {
 		return http.StatusUnprocessableEntity
 	case domain.CodeRateLimitExceeded:
 		return http.StatusTooManyRequests
+	case domain.CodeInstanceNotPaired, domain.CodeAlreadyPaired, domain.CodePairingInProgress:
+		return http.StatusConflict
+	case domain.CodeInvalidPhoneNumber:
+		return http.StatusUnprocessableEntity
+	case domain.CodeSessionUnavailable:
+		return http.StatusServiceUnavailable
 	default:
 		return http.StatusInternalServerError
 	}

@@ -24,6 +24,12 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
+// Unwrap exposes the underlying writer so http.ResponseController can reach
+// capabilities this wrapper does not implement — hijacking above all. Without
+// it a WebSocket upgrade behind this middleware answers 501, because the
+// upgrader cannot take over the connection it was handed.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
 func (r *statusRecorder) Write(b []byte) (int, error) {
 	if r.status == 0 {
 		r.status = http.StatusOK
