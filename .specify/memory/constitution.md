@@ -1,26 +1,33 @@
 <!--
 Sync Impact Report
 ==================
-Version change: 2.2.0 → 2.3.0
-Rationale: MINOR — a RFC 9457 passa a prevalecer sobre o modelo de referência (zapperhub)
-no padrão de respostas introduzido na v2.2.0: o envelope de sucesso troca
-`status: "success"` pelo **código HTTP numérico** da resposta, alinhando o campo à
-semântica do membro `status` dos problem details da RFC 9457. Formato vigente:
-{ "status": <código HTTP numérico>, "data": ..., "timestamp": ... }. Erros permanecem
-RFC 9457 (application/problem+json) + `code` estável + `timestamp`. É uma redefinição
-material de regra introduzida na v2.2.0 no mesmo ciclo de emendas, ainda sem qualquer
-implementação em código — por isso MINOR (mudança material de orientação), não MAJOR
-(não há contrato publicado/implementado sendo quebrado nem princípio removido).
-Referências técnicas já atualizadas: TECH_STACK.md ("Padrões da API / Envelope de
-resposta") e specs/001-account-foundation/ (contracts/http-api.md, research.md R10,
-quickstart.md).
+Version change: 2.3.0 → 2.4.0
+Rationale: MINOR — corrige um erro factual no modelo de domínio e acrescenta duas regras
+materiais sobre limites. (1) O WhatsApp é multi-dispositivo: um número mantém vários
+dispositivos companheiros vinculados, cada um com sessão e identificador próprios. A
+constituição definia "instância = um número WhatsApp", o que induzia a tratar duas
+instâncias do mesmo número como conflito — na prática são dispositivos distintos que
+convivem conectados. A unidade de isolamento continua sendo a instância; muda o que ela
+representa. (2) Fica explícito que a plataforma não impõe teto de instâncias ou sessões:
+sendo self-hosted, dimensionar capacidade é do operador. (3) Fica explícito que limites da
+Meta sobre o número do cliente são regra externa que a plataforma não replica nem antecipa.
+Não há remoção nem redefinição incompatível de princípio, e nenhum código depende hoje da
+leitura anterior — por isso MINOR, não MAJOR.
 
 Modified principles:
-- IV. Contrato de API como Fonte de Verdade: bullet do envelope de sucesso redefinido —
-  `status` carrega o código HTTP numérico (semântica RFC 9457), vedadas strings de estado.
+- II. Multi-Tenancy com Isolamento por Instância: definição de instância corrigida para
+  "dispositivo companheiro vinculado a um número WhatsApp"; racional reescrito em torno da
+  instância (não do número); dois bullets novos — ausência de teto imposto pela plataforma
+  e não-replicação de limites da Meta.
+- III. Posse Exclusiva de Sessão: escopo da exclusividade esclarecido — é por sessão de
+  dispositivo, não por número; instâncias distintas do mesmo número podem estar conectadas
+  simultaneamente, inclusive em workers diferentes.
 Modified sections: nenhuma outra
 Added sections: nenhuma
 Removed sections: nenhuma
+Referências técnicas já alinhadas a esta emenda: README.md ("O que é"),
+ARCHITECTURE.md ("Modelo de contas e isolamento" e tabela de decisões) e
+specs/001-account-foundation/ (spec.md US2/US3/Key Entities, data-model.md).
 Deferred items / TODOs: nenhum
 -->
 
@@ -48,9 +55,11 @@ valem mais que conveniência de curto prazo.
 ### II. Multi-Tenancy com Isolamento por Instância
 
 O modelo de contas tem dois níveis — a plataforma (super-admin) gerencia tenants; cada tenant
-é um admin que gerencia suas próprias instâncias (cada instância = um número WhatsApp = uma
-sessão). A **instância é a unidade de isolamento**: credenciais e canais de eventos pertencem
-à instância, não ao tenant. Regras:
+é um admin que gerencia suas próprias instâncias. Uma **instância = um dispositivo companheiro
+vinculado a um número WhatsApp = uma sessão**; o WhatsApp é multi-dispositivo, portanto várias
+instâncias PODEM estar pareadas ao mesmo número, cada uma como um dispositivo distinto,
+convivendo conectadas ao mesmo tempo. A **instância é a unidade de isolamento**: credenciais e
+canais de eventos pertencem à instância, não ao tenant nem ao número. Regras:
 
 - Rotas operacionais exigem API key **da instância** (armazenada como hash no Postgres,
   revogável instantaneamente); a API DEVE validar que a key pertence à instância da URL. A
@@ -64,6 +73,13 @@ sessão). A **instância é a unidade de isolamento**: credenciais e canais de e
   configuráveis por tenant, DEVE proteger todas as rotas operacionais — um tenant
   descontrolado NÃO PODE degradar os demais, e uma instância NÃO PODE consumir a cota das
   outras.
+- A plataforma NÃO IMPÕE teto de instâncias cadastradas nem de sessões conectadas, por tenant
+  ou global. A ZapperMeow é self-hosted: dimensionar a capacidade — servidor maior ou mais nós
+  no cluster — é responsabilidade de quem hospeda. Parâmetros como sessões por worker são
+  limites operacionais de dimensionamento, ajustáveis pelo operador, nunca cotas de produto.
+- Limites impostos pela Meta ao número do cliente (quantidade de dispositivos vinculados,
+  banimentos, políticas de uso) são regra externa: a plataforma NÃO os replica nem os antecipa;
+  apenas reflete fielmente o resultado observado ao tenant.
 - Webhooks são configurados **por instância** (URL, filtro de tipos de evento e segredo
   próprios); payloads DEVEM ser assinados com HMAC-SHA256 usando o segredo do webhook da
   instância.
@@ -74,14 +90,18 @@ sessão). A **instância é a unidade de isolamento**: credenciais e canais de e
   (`secrets:`) no Docker Compose, ambos montados em `/run/secrets` — com env vars só como
   fallback de desenvolvimento. Segredos NUNCA aparecem em logs.
 
-**Racional:** isolamento por número é requisito de segurança — vazamento ou rotação de
-credenciais de um número não pode afetar os demais, e sistemas distintos de um mesmo tenant
-consomem números distintos.
+**Racional:** isolamento por instância é requisito de segurança — vazamento ou rotação de
+credenciais de uma instância não pode afetar as demais. Como cada instância é um dispositivo
+independente, sistemas distintos de um mesmo tenant podem operar até o mesmo número por
+instâncias separadas, com credenciais, webhooks e revogação independentes.
 
 ### III. Posse Exclusiva de Sessão (NON-NEGOCIÁVEL)
 
-Cada instância WhatsApp mantém estado criptográfico Signal e DEVE estar conectada em
-exatamente um processo por vez — duplo-connect corrompe o estado. Consequências obrigatórias:
+Cada instância mantém o estado criptográfico Signal do **seu** dispositivo e DEVE estar
+conectada em exatamente um processo por vez — duplo-connect da mesma sessão corrompe o estado.
+A restrição é por sessão de dispositivo, não por número: instâncias distintas do mesmo número
+são sessões distintas e podem estar conectadas simultaneamente, inclusive em workers
+diferentes. Consequências obrigatórias:
 
 - O plano stateless (serviço `api`) e o plano stateful (serviço `session-worker`) permanecem
   separados. A `api` NUNCA abre conexões WhatsApp; ela escala horizontalmente sem restrição.
@@ -221,4 +241,4 @@ Stack fixa do projeto — desvios exigem emenda a esta constituição:
   complementam esta constituição; divergências entre eles e este documento resolvem-se em
   favor da constituição e DEVEM gerar correção em um dos lados.
 
-**Version**: 2.3.0 | **Ratified**: 2026-08-12 | **Last Amended**: 2026-08-12
+**Version**: 2.4.0 | **Ratified**: 2026-08-12 | **Last Amended**: 2026-08-13

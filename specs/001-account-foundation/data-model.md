@@ -80,7 +80,7 @@ Pessoa que autentica por email/senha (US1, US2, US5, US6). Nesta feature: 1 supe
 
 ### instances
 
-Registro de um futuro número WhatsApp (US2). Sem pareamento nesta feature.
+Registro de um futuro dispositivo vinculado a um número WhatsApp (US2). Sem pareamento nesta feature.
 
 | Coluna | Tipo | Regras |
 | --- | --- | --- |
