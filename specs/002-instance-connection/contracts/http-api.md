@@ -21,6 +21,11 @@ IDs UUID; datas RFC 3339 UTC). Acréscimos desta feature:
   ou pela consulta de estado.
 - **Idempotência**: repetir um comando no estado já alcançado responde `202` sem efeito colateral
   (FR-008).
+- **Rate limiting**: todas as rotas desta feature são operacionais e passam pelo limitador GCRA
+  distribuído — chaveado por `api_key_id` quando autenticadas pela key da instância (isolamento por
+  instância, como exige o Princípio II) e por `tenant_id` quando autenticadas por JWT de tenant.
+  O handshake do WebSocket é contabilizado no mesmo limitador. Estouro responde `429` com
+  `code: RATE_LIMIT_EXCEEDED`, o mesmo código já publicado pela 001.
 
 ## Resumo de endpoints
 
@@ -40,7 +45,8 @@ IDs UUID; datas RFC 3339 UTC). Acréscimos desta feature:
 
 | `code` | HTTP | Quando |
 | --- | --- | --- |
-| `INSTANCE_NOT_PAIRED` | `409` | Operação que exige sessão salva numa instância `registrada` |
+| `INSTANCE_NOT_PAIRED` | `409` | Operação que exige sessão salva numa instância `registered` |
+| `ALREADY_PAIRED` | `409` | Pareamento solicitado numa instância que já tem sessão salva — deslogue antes |
 | `PAIRING_IN_PROGRESS` | `409` | `pair-phone` durante pareamento por QR já ativo, quando o cliente pede `replace=false` |
 | `INVALID_PHONE_NUMBER` | `422` | Número fora do formato internacional (FR-013) |
 | `SESSION_UNAVAILABLE` | `503` | Nenhum worker disponível **e** o comando exige dono vivo (não se aplica a `connect`) |
@@ -53,7 +59,7 @@ IDs UUID; datas RFC 3339 UTC). Acréscimos desta feature:
 ### 1. `POST /instances/{instanceId}/connect`
 
 Liga a instância. Sem sessão salva, inicia pareamento por QR; com sessão salva, restabelece a
-conexão. Define `connection_intent = ativa` e limpa `last_disconnect_reason` (reabilitando a
+conexão. Define `connection_intent = active` e limpa `last_disconnect_reason` (reabilitando a
 adoção automática mesmo após invalidação — FR-031).
 
 Sem corpo.
@@ -65,15 +71,15 @@ Sem corpo.
   "status": 202,
   "data": {
     "instance_id": "018f...",
-    "state": "pareando",
-    "intent": "ativa",
+    "state": "pairing",
+    "intent": "active",
     "pairing": { "method": "qr", "expires_at": "2026-08-13T12:03:00Z" }
   },
   "timestamp": "2026-08-13T12:00:00Z"
 }
 ```
 
-- Instância já `conectada` → `202` com `state: "conectada"`, sem novo QR (edge case de idempotência).
+- Instância já `connected` → `202` com `state: "connected"`, sem novo QR (edge case de idempotência).
 - `pairing` só aparece quando uma tentativa foi iniciada; o QR em si **nunca** vem por HTTP — só
   pelo WebSocket, porque é um stream de códigos que se renovam.
 
@@ -90,7 +96,7 @@ Pareamento por código de 8 caracteres, sem QR (US6).
 ```json
 {
   "status": 200,
-  "data": { "pairing_code": "ABCD-2345", "expires_at": "2026-08-13T12:03:00Z", "state": "pareando" },
+  "data": { "pairing_code": "ABCD-2345", "expires_at": "2026-08-13T12:03:00Z", "state": "pairing" },
   "timestamp": "2026-08-13T12:00:00Z"
 }
 ```
@@ -98,28 +104,28 @@ Pareamento por código de 8 caracteres, sem QR (US6).
 - `phone_number`: E.164 sem `+`; inválido → `422 INVALID_PHONE_NUMBER` **sem alterar o estado**.
 - `replace_active` (default `true`): encerra uma tentativa em curso e assume o lugar (FR-014);
   com `false`, uma tentativa ativa resulta em `409 PAIRING_IN_PROGRESS`.
-- Instância já pareada → `409 INSTANCE_NOT_PAIRED` invertido: aqui responde `409` com
-  `code: ALREADY_PAIRED`; use `logout` antes de parear outro dispositivo.
+- Instância que já possui sessão salva → `409` com `code: ALREADY_PAIRED`; use `logout` antes de
+  parear outro dispositivo.
 
 ### 3. `POST /instances/{instanceId}/disconnect`
 
-Coloca offline **preservando** o material da sessão. Define `connection_intent = parada` e
+Coloca offline **preservando** o material da sessão. Define `connection_intent = stopped` e
 `desired_state = stopped`.
 
-`202` com `{ "state": "desconectada", "intent": "parada" }`. Repetir em instância já desconectada
+`202` com `{ "state": "disconnected", "intent": "stopped" }`. Repetir em instância já desconectada
 responde `202` idêntico (FR-008).
 
 ### 4. `POST /instances/{instanceId}/logout`
 
 Encerra a sessão junto ao WhatsApp, remove o dispositivo da lista do aparelho, apaga o material e
-devolve a instância a `registrada` (FR-006).
+devolve a instância a `registered` (FR-006).
 
 `202`:
 
 ```json
 {
   "status": 202,
-  "data": { "state": "registrada", "intent": "parada", "logout_mode": "remote" },
+  "data": { "state": "registered", "intent": "stopped", "logout_mode": "remote" },
   "timestamp": "2026-08-13T12:00:00Z"
 }
 ```
@@ -139,8 +145,8 @@ Estado corrente (FR-032).
   "status": 200,
   "data": {
     "instance_id": "018f...",
-    "state": "conectada",
-    "intent": "ativa",
+    "state": "connected",
+    "intent": "active",
     "connected_at": "2026-08-13T11:20:00Z",
     "device": {
       "jid": "5511999999999:11@s.whatsapp.net",
@@ -158,7 +164,7 @@ Estado corrente (FR-032).
 ```
 
 - `device` é `null` em instância nunca pareada; o endpoint responde `200` com
-  `state: "registrada"`, nunca erro (cenário 4 da US3).
+  `state: "registered"`, nunca erro (cenário 4 da US3).
 - `shares_number_with`: outras instâncias **do mesmo tenant** com o mesmo `phone_number` —
   informativo, nunca bloqueio (FR-018). Lista vazia é o caso comum.
 

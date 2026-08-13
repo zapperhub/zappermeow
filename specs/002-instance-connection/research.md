@@ -72,13 +72,21 @@ bloqueia, publicando cada código no Redis imediatamente.
 | `ConnectFailure` (motivo desconhecido) | invalidação | `desconectada` + motivo `connect_failure` | **não** |
 | `CATRefreshError` | invalidação | `desconectada` + motivo `cat_refresh_failed` | **não** |
 
-**Rationale**: a interface `PermanentDisconnect` existe na biblioteca, mas é implementada apenas
-por `TemporaryBan`, `ConnectFailure` e `CATRefreshError` (verificado por grep em
-`types/events/events.go`) — **`LoggedOut` e `StreamReplaced` não a implementam**. Confiar só na
-type assertion deixaria justamente o caso mais importante (logout pelo aparelho) sendo tratado
-como queda transitória, com reconexão infinita contra uma sessão morta — exatamente o que a US5
-proíbe. A tabela acima é a fonte de verdade e vira uma função pura testável
-(`wa.ClassifyDisconnect(evt) (kind, state, reason)`).
+**Rationale**: a biblioteca expõe a interface `events.PermanentDisconnect`, implementada pelos seis
+eventos que a tabela marca como invalidação — `LoggedOut`, `StreamReplaced`, `ClientOutdated`,
+`CATRefreshError`, `TemporaryBan` e `ConnectFailure` (verificado em `types/events/events.go`). Ela
+responde bem "devo parar de tentar?", mas **só isso**: não diz se a instância ficou deslogada,
+banida ou apenas offline, nem qual motivo o tenant deve ver. Por isso a tabela acima é a fonte de
+verdade do mapeamento e vira uma função pura testável (`wa.ClassifyDisconnect`), com a interface
+usada de duas formas complementares: como *cross-check* nos testes (tabela e biblioteca não podem
+divergir sobre permanência) e como **default defensivo** — um evento permanente que uma versão
+futura da biblioteca venha a introduzir para a reconexão em vez de ser retentado para sempre.
+
+> **Correção**: uma versão anterior desta decisão afirmava que `LoggedOut` e `StreamReplaced` não
+> implementavam a interface. Era erro de verificação (o grep exigia `string {` e as implementações
+> usam espaçamento alinhado, `string     {`). O desenho não muda — a tabela continua necessária
+> pelo mapeamento — mas a justificativa era falsa e o default defensivo acima só existe porque a
+> interface, na verdade, é confiável.
 
 **Nota sobre `StreamReplaced`**: com o lease funcionando, ele nunca deveria ocorrer — significa
 que a mesma credencial de device foi aberta em outro lugar. Além de encerrar a sessão, ele DEVE
@@ -294,17 +302,24 @@ exercitada contra infra real.
 ## R14 — Toolchain do gRPC
 
 **Decision**: `.proto` versionado em `proto/session/v1/session.proto`, código gerado em
-`internal/pb/sessionv1/` via `protoc-gen-go` + `protoc-gen-go-grpc` fixados como `tool` directives
-no `go.mod` (Go 1.25). O CI ganha uma verificação de código gerado espelhando a que já existe para
-o sqlc (`git diff --exit-code`).
+`internal/pb/sessionv1/` por **`buf`**, ele próprio um `tool` directive do `go.mod`, junto com
+`protoc-gen-go` e `protoc-gen-go-grpc`. A geração roda por `go generate ./proto/...` e o CI verifica
+que a saída está atualizada (`git diff --exit-code`), espelhando o que já existe para o sqlc.
 
 **Rationale**: o Princípio IV exige contratos internos api↔worker em Protobuf versionados no
-repositório. Tool directives no `go.mod` mantêm as versões dos geradores fixas e reproduzíveis sem
-`buf` nem imagem extra. A verificação no CI impede que código gerado desatualizado seja mergeado —
-mesmo problema, mesma solução já adotada para o sqlc.
+repositório. O `buf` compila `.proto` em Go puro, então toda a cadeia de geração vem do grafo de
+módulos: nenhum colaborador precisa instalar nada fora do Go, e o CI não baixa binário externo.
 
-**Alternatives considered**: `buf` (ótimo, mas é ferramenta e configuração a mais para um único
-serviço interno); commitar sem verificação no CI (rejeitado: geração silenciosamente defasada).
+> **Revisão**: a decisão original era `protoc` + plugins Go, com o `protoc` vindo de release fixada
+> no CI. A implementação mostrou o custo: `protoc` é binário C++ e teria de ser instalado no sistema
+> de cada pessoa que rodasse `go generate` — atrito real num projeto Go, além de mais uma release
+> para baixar e fixar no CI. O `buf` elimina os dois problemas ao preço de uma dependência de
+> ferramenta (não entra no binário). Vale registrar que o argumento original contra ele
+> ("configuração a mais") custa dois arquivos de ~15 linhas.
+
+**Alternatives considered**: `protoc` instalado no sistema (rejeitado pelo atrito acima); imagem
+Docker com `protoc` para gerar (peça de infra a mais no fluxo local); commitar sem verificação no
+CI (rejeitado: geração silenciosamente defasada).
 
 **Transporte**: gRPC em texto claro na rede privada (overlay no Swarm, bridge no Compose),
 conforme a constituição — o `grpc_addr` do lease é discado diretamente, nunca um VIP com

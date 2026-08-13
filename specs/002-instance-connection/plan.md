@@ -23,9 +23,11 @@ inicial e deduplicação por número de sequência. O HyperMeow compartilha o **
 via `stdlib.OpenDBFromPool` + `sqlstore.NewWithDB(db, "pgx", …)`, versionando suas próprias tabelas.
 
 Todas as decisões da fase de pesquisa foram verificadas contra o **código real do fork** no module
-cache, não contra documentação upstream — e uma delas inverteu o desenho: `events.LoggedOut` e
-`events.StreamReplaced` **não** implementam a interface `PermanentDisconnect` da biblioteca, então a
-distinção entre queda e invalidação (US5) precisa de classificação explícita, não de type assertion.
+cache, não contra documentação upstream. A distinção entre queda e invalidação (US5) usa uma tabela
+de classificação explícita: a interface `events.PermanentDisconnect` da biblioteca diz apenas *se*
+convém parar de tentar, não *qual* estado e motivo o tenant deve ver — mas é confiável, e por isso
+serve de cross-check nos testes e de default defensivo para eventos permanentes que versões futuras
+venham a introduzir.
 
 ## Technical Context
 
@@ -85,7 +87,7 @@ imposto pela plataforma).
 | # | Princípio | Avaliação | Status |
 |---|-----------|-----------|--------|
 | I | Simplicidade e Stdlib-First | Nenhuma peça nova de infra: o mesmo Postgres serve API, store do HyperMeow e leases; o mesmo Redis serve pub/sub, sequência e cache. SQL continua explícito via sqlc. Três dependências novas, todas justificadas: hypermeow (o core do produto, já na constituição), grpc/protobuf (o Princípio IV **exige** contrato interno em Protobuf) e coder/websocket (canal previsto na constituição; escolhido por não ter dependências transitivas) | ✅ PASS |
-| II | Multi-Tenancy com Isolamento por Instância | Toda rota de conexão aceita JWT de tenant **ou** API key da instância, sempre validando que a credencial resolve para a instância da URL; WS autentica antes de qualquer frame e fecha em revogação (4403). Suspensão de tenant derruba sessões preservando a intenção do usuário (R12). Sem teto de instâncias — aderente à v2.4.0; `MAX_SESSIONS_PER_WORKER` é knob de dimensionamento, explicitamente não uma cota | ✅ PASS |
+| II | Multi-Tenancy com Isolamento por Instância | Toda rota de conexão aceita JWT de tenant **ou** API key da instância, sempre validando que a credencial resolve para a instância da URL; WS autentica antes de qualquer frame e fecha em revogação (4403). Suspensão de tenant derruba sessões preservando a intenção do usuário (R12). Sem teto de instâncias — aderente à v2.4.0; `MAX_SESSIONS_PER_WORKER` é knob de dimensionamento, explicitamente não uma cota. As rotas desta feature são operacionais e passam pelo limitador GCRA distribuído — por `api_key_id` quando a credencial é key, por `tenant_id` quando é JWT — com o handshake do WebSocket contabilizado no mesmo limitador (T022, T023) | ✅ PASS |
 | III | Posse Exclusiva de Sessão (NON-NEGOCIÁVEL) | É a espinha dorsal da feature: lease com aquisição atômica, heartbeat, expiração, fencing por `generation` em toda RPC e todo evento, drain no SIGTERM, reconciliação descentralizada. Nenhum caminho fala com uma sessão sem passar pelo lease — a api não abre conexão WhatsApp em hipótese alguma. Duas travas extras: UNIQUE em `instances.wa_jid` (dois registros jamais representam o mesmo device) e `zappermeow_stream_replaced_total` como alarme de violação | ✅ PASS |
 | IV | Contrato de API como Fonte de Verdade | Endpoints HTTP tipados em huma com envelope padrão e erros RFC 9457 + `code`; contrato interno api↔worker em `proto/session/v1/`, versionado, com verificação de código gerado no CI. Frames do WebSocket não são respostas HTTP e têm contrato próprio documentado — ver Complexity Tracking | ⚠️ PASS com desvio registrado |
 | V | Testes Contra Infraestrutura Real | Postgres e Redis **reais** (testcontainers) para tudo que é infra: queries sqlc, lease, fencing, disputa entre workers, pub/sub, retenção. O WhatsApp é serviço de terceiros sem test double possível — ver Complexity Tracking | ⚠️ PASS com desvio registrado |

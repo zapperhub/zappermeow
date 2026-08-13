@@ -108,9 +108,13 @@ CREATE TABLE session_leases (
     grpc_addr     text,                    -- endereço gRPC do worker na overlay network
     generation    bigint NOT NULL DEFAULT 0, -- fencing token: incrementa a cada aquisição
     heartbeat_at  timestamptz,
-    desired_state text NOT NULL DEFAULT 'running' -- running | stopped | draining
+    desired_state text NOT NULL DEFAULT 'stopped' -- running | stopped | draining
 );
 ```
+
+A linha nasce sob demanda, no primeiro comando de conexão da instância, e o default é `stopped`
+para falhar fechado: uma linha criada por qualquer outro caminho jamais liga uma sessão sozinha.
+Quem liga é o comando explícito, que grava `running`.
 
 **Aquisição (atômica):**
 

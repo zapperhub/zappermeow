@@ -37,7 +37,7 @@ conexão e a identidade do dispositivo pareado.
 
 **Notas**
 
-- O campo `state` da 001 (`registrada`) é **absorvido** por `connection_state`; a migração copia o
+- O campo `state` da 001 (`registered`) é **absorvido** por `connection_state`; a migração copia o
   valor e remove a coluna antiga — o vocabulário passa a ser um só.
 - Exclusão de instância continua em cascata para `api_keys`, e agora também para `session_leases` e
   `connection_events`. O material da sessão em `whatsmeow_*` **não** tem FK para `instances` (é
@@ -138,13 +138,13 @@ Trilha consultável de transições, com retenção limitada (FR-036, FR-037).
 
 | Estado | Significado | `connection_intent` típico | Reconecta sozinho? |
 | --- | --- | --- | --- |
-| `registrada` | Sem material de sessão; exige pareamento | `parada` | não |
-| `pareando` | Tentativa ativa (QR ou código) | `ativa` | n/a |
-| `conectando` | Pareada, tentando estabelecer conexão | `ativa` | sim |
-| `conectada` | Online | `ativa` | — |
-| `desconectada` | Offline por decisão explícita **ou** por invalidação sem estado próprio | `parada` (explícita) / `ativa` (invalidação) | só se `last_disconnect_reason` não for permanente |
-| `deslogada` | Sessão removida pelo aparelho | `ativa` (preservada) | **não** |
-| `banida` | Banimento temporário informado pelo WhatsApp | `ativa` (preservada) | **não** |
+| `registered` | Sem material de sessão; exige pareamento | `stopped` | não |
+| `pairing` | Tentativa ativa (QR ou código) | `active` | n/a |
+| `connecting` | Pareada, tentando estabelecer conexão | `active` | sim |
+| `connected` | Online | `active` | — |
+| `disconnected` | Offline por decisão explícita **ou** por invalidação sem estado próprio | `stopped` (explícita) / `active` (invalidação) | só se `last_disconnect_reason` não for permanente |
+| `logged_out` | Sessão removida pelo aparelho | `active` (preservada) | **não** |
+| `banned` | Banimento temporário informado pelo WhatsApp | `active` (preservada) | **não** |
 
 **Regra de retomada** (R3): a reconciliação só adota instâncias com `desired_state = 'running'`
 **e** `last_disconnect_reason` fora do conjunto permanente. Um comando explícito de conexão limpa
@@ -154,6 +154,11 @@ Trilha consultável de transições, com retenção limitada (FR-036, FR-037).
 
 ## 5. Vocabulários canônicos
 
+> **Idioma dos valores**: identificadores em banco, API e eventos são **em inglês**, seguindo o que a
+> 001 já publicou (`state: "registered"`, `status: "active"`). Os nomes em português usados na spec
+> (`registrada`, `pareando`, `conectada`…) são o vocabulário de domínio na prosa; a correspondência
+> está na tabela da §4.
+
 **`connection_events.type`**: `pairing_started`, `pairing_succeeded`, `pairing_expired`,
 `pairing_failed`, `connected`, `disconnected`, `logged_out`, `banned`, `number_changed`,
 `lease_acquired`, `lease_lost`, `deleted`.
@@ -162,7 +167,7 @@ Trilha consultável de transições, com retenção limitada (FR-036, FR-037).
 
 | Motivo | Origem | Permanente? |
 | --- | --- | --- |
-| `user_requested` | comando de desconexão | sim (intenção `parada`) |
+| `user_requested` | comando de desconexão | sim (intenção `stopped`) |
 | `network` | `events.Disconnected` | não |
 | `keepalive_timeout` | `events.KeepAliveTimeout` | não |
 | `worker_lost` | lease expirado / worker morto | não |

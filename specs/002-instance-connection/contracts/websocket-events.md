@@ -28,6 +28,12 @@ Falhas do handshake acontecem **antes** do upgrade, como resposta HTTP normal: `
 (FR-034). Não há limite por instância nesta fatia; a métrica `zappermeow_ws_clients` acompanha o
 total.
 
+**Limites e observabilidade**: o handshake é contabilizado no mesmo limitador GCRA das rotas de
+conexão (por `api_key_id` ou `tenant_id`); excedida a cota, o servidor responde `429` **antes** do
+upgrade — nunca abre a conexão para fechá-la em seguida. Como o endpoint é um handler chi fora do
+huma, o request logging estruturado com `tenant_id`/`instance_id` é aplicado explicitamente nele
+(Princípio VI), e não herdado dos middlewares da API.
+
 ## Envelope
 
 Todo frame é JSON UTF-8 com a mesma forma:
@@ -72,8 +78,8 @@ próximo (FR-032, cenário 4 da US1).
   "seq": 41, "type": "state.snapshot", "instance_id": "018f...", "generation": 7,
   "occurred_at": "2026-08-13T12:00:00.000Z",
   "data": {
-    "state": "pareando",
-    "intent": "ativa",
+    "state": "pairing",
+    "intent": "active",
     "device": null,
     "connected_at": null,
     "last_disconnect": { "at": "2026-08-13T11:18:31Z", "reason": "network" },
@@ -153,7 +159,7 @@ ação humana. Vocabulário de `reason` em [../data-model.md](../data-model.md) 
 { "data": { "reason": "logged_out_from_phone", "from_phone": true } }
 ```
 
-Sessão invalidada pelo aparelho ou pelo servidor (FR-029). A instância volta a `registrada` e
+Sessão invalidada pelo aparelho ou pelo servidor (FR-029). A instância volta a `registered` e
 exige novo pareamento. Não afeta outras instâncias do mesmo número.
 
 ### `connection.banned`

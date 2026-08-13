@@ -15,6 +15,21 @@ Uma plataforma que você roda na sua própria infraestrutura para expor o WhatsA
 
 Go 1.25+ · chi + huma (OpenAPI 3.1) · PostgreSQL 17 (pgx + sqlc) · Redis (asynq, cache, rate limit) · MinIO · gRPC entre serviços · Docker Swarm + Traefik. Detalhes e justificativas em [TECH_STACK.md](TECH_STACK.md).
 
+## Desenvolvimento
+
+Duas etapas do código são geradas e **versionadas** no repositório; o CI reprova o merge se a saída
+gerada estiver defasada em relação à fonte.
+
+```bash
+sqlc generate            # internal/store/ a partir de internal/store/queries/*.sql
+go generate ./proto/...  # internal/pb/ a partir de proto/**/*.proto
+```
+
+O compilador (`buf`) e os plugins (`protoc-gen-go`, `protoc-gen-go-grpc`) vêm fixados como `tool`
+directives no `go.mod`, então **não há nada a instalar** além do Go — nem `protoc`, nem imagem
+Docker. O `sqlc`, por depender de um binário externo, continua vindo da release em versão fixa no
+CI: um upgrade silencioso mudaria a saída gerada.
+
 ## Licença e modelo do projeto
 
 Código sob licença [MIT](LICENSE) — use, modifique e hospede livremente, inclusive comercialmente.
