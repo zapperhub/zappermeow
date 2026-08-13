@@ -11,19 +11,20 @@ Cada instância WhatsApp é uma conexão WebSocket persistente com estado cripto
 
 ## Modelo de contas e isolamento
 
-Dois níveis de contas, com a **instância** (um número WhatsApp) como unidade de isolamento:
+Dois níveis de contas, com a **instância** (um dispositivo companheiro vinculado a um número WhatsApp) como unidade de isolamento:
 
 ```
 Plataforma (super-admin, JWT de plataforma)
 └── Tenant (admin com login próprio → JWT de tenant)
-    └── Instância (número WhatsApp; 1 instância = 1 sessão = 1 lease)
+    └── Instância (dispositivo companheiro de um número; 1 instância = 1 sessão = 1 lease)
         ├── API keys (N, hash no Postgres, revogáveis)
         └── Webhooks (URL + filtro de eventos + segredo HMAC)
 ```
 
 - O **operador da plataforma** cria e gerencia tenants (e seus limites de uso).
-- Cada **tenant** é um admin da plataforma: faz login e gerencia suas próprias instâncias — cria números, pareia via QR, emite API keys, configura webhooks. Um tenant tem **N instâncias**.
-- Cada **instância** carrega suas próprias credenciais: API keys e webhooks pertencem à instância, não ao tenant. Vazamento ou rotação de credenciais de um número não afeta os demais, e sistemas distintos do tenant podem consumir números distintos.
+- Cada **tenant** é um admin da plataforma: faz login e gerencia suas próprias instâncias — cadastra, pareia via QR, emite API keys, configura webhooks. Um tenant tem **N instâncias**.
+- O WhatsApp é multi-dispositivo: um mesmo número mantém vários dispositivos companheiros vinculados, cada um com sessão e identificador próprios (o sufixo de dispositivo no JID, ex.: `5511999999999:11@s.whatsapp.net`). Logo, **N instâncias podem apontar para o mesmo número** e permanecer conectadas simultaneamente — são sessões distintas, não um conflito. Quantos dispositivos uma conta comporta é regra da Meta, aplicada dentro do aplicativo do cliente; a plataforma não a conhece nem a replica.
+- Cada **instância** carrega suas próprias credenciais: API keys e webhooks pertencem à instância, não ao tenant nem ao número. Vazamento ou rotação de credenciais de uma instância não afeta as demais, e sistemas distintos do tenant podem operar até o mesmo número por instâncias separadas.
 
 Garantias de isolamento:
 
@@ -231,7 +232,7 @@ zappermeow/
 | Reconciliação descentralizada | Na escala de centenas de sessões, workers auto-organizados bastam; sem coordenador |
 | Binário único multi-role | Um build, uma imagem, código de domínio compartilhado sem versionamento interno |
 | Eventos via Redis pub/sub + asynq | Pub/sub para tempo real (WS), asynq para entrega garantida (webhooks) |
-| API keys e webhooks por instância | Isolamento por número: vazamento/rotação de credenciais de um número não afeta os demais; sistemas distintos consomem números distintos |
+| API keys e webhooks por instância | Isolamento por instância: vazamento/rotação de credenciais de uma instância não afeta as demais; sistemas distintos usam instâncias distintas, até de um mesmo número |
 
 ## Limites conhecidos e evolução
 

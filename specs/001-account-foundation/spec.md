@@ -32,7 +32,7 @@ O operador da plataforma instala a ZapperMeow, define a credencial inicial do su
 
 ### User Story 2 - Admin de tenant faz login e registra instâncias (Priority: P2)
 
-O admin de um tenant faz login com email/senha, recebe um token de tenant e passa a gerenciar o cadastro das suas instâncias (cada instância representará um número de WhatsApp): criar com um nome amigável, listar, consultar, renomear e excluir. Nesta feature a instância é apenas um registro — o pareamento com o WhatsApp fica para uma feature futura.
+O admin de um tenant faz login com email/senha, recebe um token de tenant e passa a gerenciar o cadastro das suas instâncias (cada instância representará um dispositivo vinculado a um número de WhatsApp): criar com um nome amigável, listar, consultar, renomear e excluir. Nesta feature a instância é apenas um registro — o pareamento com o WhatsApp fica para uma feature futura.
 
 **Why this priority**: É a segunda camada da hierarquia e pré-requisito das API keys. Entrega valor próprio: o tenant já organiza seus números e enxerga seu espaço isolado na plataforma.
 
@@ -53,7 +53,7 @@ O admin de um tenant faz login com email/senha, recebe um token de tenant e pass
 
 O admin do tenant cria API keys para uma instância — cada key pode receber um rótulo (ex.: "produção") e o segredo é exibido **uma única vez** na criação. Várias keys podem coexistir ativas (rotação sem downtime). A key autentica as rotas operacionais da própria instância; para torná-la verificável já nesta feature, existe uma consulta operacional mínima que retorna os dados da instância autenticada pela key. O admin também lista e revoga keys, com efeito imediato.
 
-**Why this priority**: Fecha a cadeia de credenciais (plataforma → tenant → instância) e entrega o valor central da fundação: sistemas externos passam a ter uma credencial própria por número, isolada e revogável.
+**Why this priority**: Fecha a cadeia de credenciais (plataforma → tenant → instância) e entrega o valor central da fundação: sistemas externos passam a ter uma credencial própria por instância, isolada e revogável.
 
 **Independent Test**: Com uma instância registrada, criar uma key, usar o segredo para consultar os dados da instância, revogar a key e confirmar que a mesma consulta passa a ser negada.
 
@@ -169,7 +169,7 @@ Após um número configurável de falhas consecutivas de login para uma mesma co
 
 - **Tenant**: cliente da plataforma. Atributos: nome único, status (ativo/suspenso), datas de criação/atualização. Possui um usuário admin e zero ou mais instâncias.
 - **Usuário**: pessoa que autentica por email/senha. Atributos: nome, email (único global), credencial de senha, papel (super-admin de plataforma ou admin de tenant), indicador de senha temporária pendente de troca, estado de bloqueio por falhas de login. Admin de tenant pertence a exatamente um tenant.
-- **Instância**: registro de um futuro número de WhatsApp. Atributos: nome amigável, estado ("registrada" nesta feature; estados de pareamento/conexão virão em features futuras), datas. Pertence a exatamente um tenant; possui zero ou mais API keys.
+- **Instância**: registro de um futuro dispositivo vinculado a um número de WhatsApp. Atributos: nome amigável, estado ("registrada" nesta feature; estados de pareamento/conexão virão em features futuras), datas. Pertence a exatamente um tenant; possui zero ou mais API keys.
 - **API Key**: credencial operacional de uma instância. Atributos: rótulo opcional, prefixo identificador visível, material de verificação do segredo (segredo completo jamais armazenado ou reexibido), status (ativa/revogada), datas de criação e revogação. Pertence a exatamente uma instância.
 - **Evento de segurança**: registro rastreável de ação sensível (login, bloqueio, criação/revogação de key, suspensão, reset de senha). Atributos: tipo, ator, alvo, resultado, origem e momento.
 
