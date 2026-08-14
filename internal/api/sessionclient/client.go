@@ -254,3 +254,45 @@ func (c *Client) Status(ctx context.Context, instanceID domain.ID) (*sessionv1.G
 			return client.GetStatus(ctx, &sessionv1.GetStatusRequest{Fence: fence})
 		})
 }
+
+// ApplySettings asks the owner to reapply the instance's stored settings.
+func (c *Client) ApplySettings(ctx context.Context, instanceID domain.ID, proxyChanged, passiveChanged bool) (*sessionv1.ApplySettingsResponse, error) {
+	return call(ctx, c, instanceID,
+		func(ctx context.Context, client sessionv1.SessionServiceClient, fence *sessionv1.Fence) (*sessionv1.ApplySettingsResponse, error) {
+			return client.ApplySettings(ctx, &sessionv1.ApplySettingsRequest{
+				Fence:          fence,
+				ProxyChanged:   proxyChanged,
+				PassiveChanged: passiveChanged,
+			})
+		})
+}
+
+// SubmitPasskeyResponse forwards the authenticator's assertion to the owner.
+func (c *Client) SubmitPasskeyResponse(ctx context.Context, instanceID domain.ID, webauthnJSON []byte) (*sessionv1.SubmitPasskeyResponseResponse, error) {
+	return call(ctx, c, instanceID,
+		func(ctx context.Context, client sessionv1.SessionServiceClient, fence *sessionv1.Fence) (*sessionv1.SubmitPasskeyResponseResponse, error) {
+			return client.SubmitPasskeyResponse(ctx, &sessionv1.SubmitPasskeyResponseRequest{
+				Fence:                fence,
+				WebauthnResponseJson: webauthnJSON,
+			})
+		})
+}
+
+// ConfirmPasskey confirms the handoff code with the owner.
+func (c *Client) ConfirmPasskey(ctx context.Context, instanceID domain.ID) (*sessionv1.ConfirmPasskeyResponse, error) {
+	return call(ctx, c, instanceID,
+		func(ctx context.Context, client sessionv1.SessionServiceClient, fence *sessionv1.Fence) (*sessionv1.ConfirmPasskeyResponse, error) {
+			return client.ConfirmPasskey(ctx, &sessionv1.ConfirmPasskeyRequest{Fence: fence})
+		})
+}
+
+// IdentityVerificationCodes reads the safety numbers for a conversation.
+func (c *Client) IdentityVerificationCodes(ctx context.Context, instanceID domain.ID, contact string) (*sessionv1.GetIdentityVerificationCodesResponse, error) {
+	return call(ctx, c, instanceID,
+		func(ctx context.Context, client sessionv1.SessionServiceClient, fence *sessionv1.Fence) (*sessionv1.GetIdentityVerificationCodesResponse, error) {
+			return client.GetIdentityVerificationCodes(ctx, &sessionv1.GetIdentityVerificationCodesRequest{
+				Fence:   fence,
+				Contact: contact,
+			})
+		})
+}

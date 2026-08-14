@@ -20,6 +20,27 @@ const (
 	ConnEventLeaseAcquired    ConnectionEventType = "lease_acquired"
 	ConnEventLeaseLost        ConnectionEventType = "lease_lost"
 	ConnEventDeleted          ConnectionEventType = "deleted"
+
+	// ConnEventStreamError is a stream closed with a code the library does not
+	// know. Detail carries stream_error_code and nothing else: the raw node is
+	// server-controlled payload with no place in a queryable trail.
+	ConnEventStreamError ConnectionEventType = "stream_error"
+	// ConnEventManualLoginReconnect is the server asking the client to
+	// reconnect on its own after pairing.
+	ConnEventManualLoginReconnect ConnectionEventType = "manual_login_reconnect"
+	// ConnEventProxyUpdated is the tenant setting, changing or removing the
+	// egress proxy. Detail carries the masked URL, never the password.
+	ConnEventProxyUpdated ConnectionEventType = "proxy_updated"
+	// ConnEventPassiveModeUpdated is the tenant toggling passive mode.
+	ConnEventPassiveModeUpdated ConnectionEventType = "passive_mode_updated"
+	// ConnEventPasskeyChallenge is WhatsApp requiring the passkey step during a
+	// pairing attempt.
+	ConnEventPasskeyChallenge ConnectionEventType = "passkey_challenge"
+	// ConnEventPasskeyResponded is the authenticator assertion forwarded.
+	ConnEventPasskeyResponded ConnectionEventType = "passkey_responded"
+	// ConnEventPasskeyConfirmed is the confirmation sent, by the tenant or
+	// automatically. Detail carries whether it was automatic.
+	ConnEventPasskeyConfirmed ConnectionEventType = "passkey_confirmed"
 )
 
 // Valid reports whether t is a known event type.
@@ -28,7 +49,10 @@ func (t ConnectionEventType) Valid() bool {
 	case ConnEventPairingStarted, ConnEventPairingSucceeded, ConnEventPairingExpired,
 		ConnEventPairingFailed, ConnEventConnected, ConnEventDisconnected,
 		ConnEventLoggedOut, ConnEventBanned, ConnEventNumberChanged,
-		ConnEventLeaseAcquired, ConnEventLeaseLost, ConnEventDeleted:
+		ConnEventLeaseAcquired, ConnEventLeaseLost, ConnEventDeleted,
+		ConnEventStreamError, ConnEventManualLoginReconnect, ConnEventProxyUpdated,
+		ConnEventPassiveModeUpdated, ConnEventPasskeyChallenge,
+		ConnEventPasskeyResponded, ConnEventPasskeyConfirmed:
 		return true
 	default:
 		return false
@@ -52,6 +76,18 @@ const (
 	ReasonKeepaliveTimeout DisconnectReason = "keepalive_timeout"
 	// ReasonWorkerLost is the owning process dying or losing its lease.
 	ReasonWorkerLost DisconnectReason = "worker_lost"
+	// ReasonStreamError is a stream closed with a code the library does not
+	// recognise. It is not permanent: the library itself neither expects the
+	// disconnect nor stops reconnecting, and treating it as terminal would park
+	// a healthy session for a transient server hiccup (research R9).
+	ReasonStreamError DisconnectReason = "stream_error"
+	// ReasonProxyConnectFailed is a dial or handshake failure through the
+	// configured proxy. Retrying is correct — and always through the proxy: a
+	// direct fallback would leak the platform's own IP (FR-005).
+	ReasonProxyConnectFailed DisconnectReason = "proxy_connect_failed"
+	// ReasonProxyUpdated is the disconnect the platform itself commands when the
+	// proxy configuration changes, immediately followed by a reconnect.
+	ReasonProxyUpdated DisconnectReason = "proxy_updated"
 
 	// --- permanent: retrying is useless or harmful ---
 
@@ -110,7 +146,8 @@ func (r DisconnectReason) Valid() bool {
 		return true
 	}
 	switch r {
-	case ReasonNetwork, ReasonKeepaliveTimeout, ReasonWorkerLost:
+	case ReasonNetwork, ReasonKeepaliveTimeout, ReasonWorkerLost,
+		ReasonStreamError, ReasonProxyConnectFailed, ReasonProxyUpdated:
 		return true
 	default:
 		return false

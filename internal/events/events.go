@@ -29,6 +29,15 @@ const (
 	TypeLoggedOut      Type = "connection.logged_out"
 	TypeBanned         Type = "connection.banned"
 	TypeNumberChanged  Type = "connection.number_changed"
+
+	// TypePairingPasskeyChallenge carries the WebAuthn challenge WhatsApp
+	// requires during a pairing attempt. Entering this step invalidates any QR
+	// code already on screen (research R7), so a client that receives it must
+	// stop showing the QR: no further pairing.code arrives for this attempt.
+	TypePairingPasskeyChallenge Type = "pairing.passkey_challenge"
+	// TypePairingPasskeyCode carries the handoff code to be compared against the
+	// handset. It is only emitted when the confirmation is not automatic.
+	TypePairingPasskeyCode Type = "pairing.passkey_code"
 )
 
 // Envelope is one frame as delivered to a WebSocket client.
@@ -69,11 +78,43 @@ func pairingKey(instanceID domain.ID) string {
 	return fmt.Sprintf("wa:pairing:%s", instanceID)
 }
 
+// PairingPhase discriminates what a pairing attempt is currently waiting on.
+// Without it, a client that opens the channel during the passkey step would see
+// a QR code that no longer works and nothing else (research R10).
+type PairingPhase string
+
+const (
+	// PhaseQR is a QR or phone code awaiting a scan.
+	PhaseQR PairingPhase = "qr"
+	// PhasePasskeyChallenge is a WebAuthn challenge awaiting an assertion.
+	PhasePasskeyChallenge PairingPhase = "passkey_challenge"
+	// PhasePasskeyCode is a handoff code awaiting confirmation.
+	PhasePasskeyCode PairingPhase = "passkey_code"
+)
+
 // PairingSnapshot is the live pairing attempt, as stored in Redis.
+//
+// Which fields are set depends on Phase: Code for qr and passkey_code,
+// Challenge for passkey_challenge. Phase is empty on snapshots written before
+// this feature, which read as PhaseQR.
 type PairingSnapshot struct {
-	Method    string    `json:"method"`
-	Code      string    `json:"code"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Method    string       `json:"method"`
+	Phase     PairingPhase `json:"phase,omitempty"`
+	Code      string       `json:"code,omitempty"`
+	ExpiresAt time.Time    `json:"expires_at"`
+
+	// Challenge is the WebAuthn publicKey object, passed through opaque: the
+	// platform never inspects or validates it.
+	Challenge json.RawMessage `json:"challenge,omitempty"`
+}
+
+// CurrentPhase reports the phase, treating the empty value as a QR attempt so
+// snapshots written by the previous version still read correctly.
+func (s PairingSnapshot) CurrentPhase() PairingPhase {
+	if s.Phase == "" {
+		return PhaseQR
+	}
+	return s.Phase
 }
 
 // Marshal encodes an envelope for the wire.

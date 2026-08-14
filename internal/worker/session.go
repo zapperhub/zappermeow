@@ -90,14 +90,178 @@ func (s *Supervisor) handle(ctx context.Context, managed *managedSession, evt wa
 			"connected_at": time.Now().UTC(),
 		})
 
+		// Passive mode is reapplied here, after every Connected — not once when
+		// the tenant asks for it. The library restores active mode on each
+		// connection, in the goroutine that runs before it dispatches this
+		// event, so a session that came back from a reconnect or a failover is
+		// active again until this runs (research R6).
+		s.reapplyPassiveMode(ctx, managed)
+
 	case wa.KindDisconnected:
 		s.handleDisconnect(ctx, managed, evt)
+
+	case wa.KindManualLoginReconnect:
+		s.handleManualLoginReconnect(ctx, managed)
+
+	case wa.KindPasskeyChallenge:
+		s.handlePasskeyChallenge(ctx, managed, evt)
+
+	case wa.KindPasskeyCode:
+		s.handlePasskeyCode(ctx, managed, evt)
 	}
+}
+
+// reapplyPassiveMode pushes the stored mode onto a session that just connected.
+//
+// A failure is logged and dropped rather than propagated: the session is up and
+// working, and taking a healthy number offline because one setting could not be
+// pushed would be a worse outcome than the setting being late. The next
+// reconnect tries again through this same path.
+func (s *Supervisor) reapplyPassiveMode(ctx context.Context, managed *managedSession) {
+	settings, err := s.queries.GetInstanceSettings(ctx, managed.instanceID)
+	if err != nil {
+		s.logger.Error("reading passive mode failed",
+			slog.String("instance_id", managed.instanceID.String()),
+			slog.String("error", err.Error()))
+		return
+	}
+	// Nothing to do when passive mode is off: the library already leaves every
+	// connection in active mode, so the default needs no call of its own.
+	if !settings.PassiveMode {
+		return
+	}
+
+	if _, err := s.applyPassiveMode(ctx, managed, true); err != nil {
+		s.logger.Error("applying passive mode after connecting failed",
+			slog.String("instance_id", managed.instanceID.String()),
+			slog.String("error", err.Error()))
+	}
+}
+
+// handleManualLoginReconnect answers the server asking the client to reconnect
+// on its own after pairing.
+//
+// The reconnect is scheduled rather than performed inline: the library
+// dispatches this one synchronously, unlike the other stream events, so
+// blocking here would stall its handler while it holds the connection down
+// (research R5).
+func (s *Supervisor) handleManualLoginReconnect(ctx context.Context, managed *managedSession) {
+	s.record(ctx, managed.instanceID, domain.ConnEventManualLoginReconnect, domain.ReasonNone, nil)
+	metrics.SessionReconnects.WithLabelValues("manual_login").Inc()
+
+	s.logger.Info("server asked for a manual reconnect after login",
+		slog.String("instance_id", managed.instanceID.String()))
+
+	go s.reconnect(managed.ctx, managed)
+}
+
+// handlePasskeyChallenge publishes the WebAuthn challenge WhatsApp requires
+// mid-attempt and parks the attempt on it.
+//
+// The snapshot moves to the passkey phase because the QR it used to hold is
+// already dead: entering this step rotates the secret that validates the codes
+// on screen. A client that opens the channel now must see the challenge, not a
+// code that silently stopped working (research R7, R10).
+func (s *Supervisor) handlePasskeyChallenge(ctx context.Context, managed *managedSession, evt wa.Event) {
+	expiresAt := managed.pairingExpiry()
+
+	snapshot := events.PairingSnapshot{
+		Method:    string(wa.MethodQR),
+		Phase:     events.PhasePasskeyChallenge,
+		Challenge: evt.Challenge,
+		ExpiresAt: expiresAt,
+	}
+	if err := s.publisher.SetPairing(ctx, managed.instanceID, snapshot); err != nil {
+		s.logger.Error("storing passkey challenge snapshot failed",
+			slog.String("instance_id", managed.instanceID.String()),
+			slog.String("error", err.Error()))
+	}
+
+	// The challenge itself is not persisted: it lives and dies with the
+	// attempt, like the QR code before it (data-model §3).
+	s.record(ctx, managed.instanceID, domain.ConnEventPasskeyChallenge, domain.ReasonNone, nil)
+	metrics.PasskeyPairings.WithLabelValues("challenged").Inc()
+
+	s.publish(ctx, managed, events.TypePairingPasskeyChallenge, map[string]any{
+		"public_key":         evt.Challenge,
+		"attempt_expires_at": expiresAt.UTC(),
+	})
+}
+
+// handlePasskeyCode publishes the handoff code for the number's owner to
+// compare against their handset.
+//
+// This only arrives when the confirmation is not automatic: with a valid
+// handoff proof the library confirms on its own and emits nothing, so there is
+// no auto-confirm path here to write (research R7).
+func (s *Supervisor) handlePasskeyCode(ctx context.Context, managed *managedSession, evt wa.Event) {
+	expiresAt := managed.pairingExpiry()
+
+	snapshot := events.PairingSnapshot{
+		Method:    string(wa.MethodQR),
+		Phase:     events.PhasePasskeyCode,
+		Code:      evt.Code,
+		ExpiresAt: expiresAt,
+	}
+	if err := s.publisher.SetPairing(ctx, managed.instanceID, snapshot); err != nil {
+		s.logger.Error("storing passkey code snapshot failed",
+			slog.String("instance_id", managed.instanceID.String()),
+			slog.String("error", err.Error()))
+	}
+
+	s.record(ctx, managed.instanceID, domain.ConnEventPasskeyResponded, domain.ReasonNone, nil)
+
+	s.publish(ctx, managed, events.TypePairingPasskeyCode, map[string]any{
+		"code":               evt.Code,
+		"attempt_expires_at": expiresAt.UTC(),
+	})
+}
+
+// SubmitPasskeyResponse forwards the authenticator's assertion for the attempt
+// in flight.
+func (s *Supervisor) SubmitPasskeyResponse(ctx context.Context, instanceID domain.ID, webauthnJSON []byte) (domain.InstanceState, error) {
+	managed, ok := s.lookup(instanceID)
+	if !ok {
+		return "", ErrUnknownInstance
+	}
+	if err := managed.session.SendPasskeyResponse(ctx, webauthnJSON); err != nil {
+		return "", err
+	}
+	return domain.InstancePairing, nil
+}
+
+// ConfirmPasskey confirms the handoff code was shown and acknowledged.
+func (s *Supervisor) ConfirmPasskey(ctx context.Context, instanceID domain.ID) (domain.InstanceState, error) {
+	managed, ok := s.lookup(instanceID)
+	if !ok {
+		return "", ErrUnknownInstance
+	}
+	if err := managed.session.ConfirmPasskey(ctx); err != nil {
+		return "", err
+	}
+
+	s.record(ctx, instanceID, domain.ConnEventPasskeyConfirmed, domain.ReasonNone,
+		map[string]any{"automatic": false})
+	return domain.InstancePairing, nil
+}
+
+// IdentityVerificationCodes derives the safety numbers for a conversation.
+func (s *Supervisor) IdentityVerificationCodes(ctx context.Context, instanceID domain.ID, contact string) (*wa.VerificationCodes, error) {
+	managed, ok := s.lookup(instanceID)
+	if !ok {
+		return nil, ErrUnknownInstance
+	}
+	codes, err := managed.session.IdentityVerificationCodes(ctx, contact)
+	if err != nil {
+		return nil, err
+	}
+	return codes, nil
 }
 
 func (s *Supervisor) handlePairingCode(ctx context.Context, managed *managedSession, evt wa.Event) {
 	snapshot := events.PairingSnapshot{
 		Method:    string(evt.Method),
+		Phase:     events.PhaseQR,
 		Code:      evt.Code,
 		ExpiresAt: evt.ExpiresAt,
 	}
@@ -249,12 +413,21 @@ func (s *Supervisor) handleDisconnect(ctx context.Context, managed *managedSessi
 	if evt.BanExpiresAt != nil {
 		detail["expires_at"] = evt.BanExpiresAt.UTC()
 	}
+	if evt.StreamErrorCode != "" {
+		// The code is the whole diagnostic value of an unknown stream error, and
+		// it is all that gets kept: the node it arrived in is server-controlled
+		// payload with no place in a queryable trail (research R9).
+		detail["stream_error_code"] = evt.StreamErrorCode
+	}
 	s.record(ctx, instanceID, eventType, evt.Reason, detail)
 
 	data := map[string]any{
 		"reason":    string(evt.Reason),
 		"permanent": evt.Permanent,
 		"at":        time.Now().UTC(),
+	}
+	if evt.StreamErrorCode != "" {
+		data["detail"] = map[string]any{"stream_error_code": evt.StreamErrorCode}
 	}
 	if frameType == events.TypeLoggedOut {
 		data["from_phone"] = true

@@ -25,11 +25,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SessionService_Connect_FullMethodName    = "/zappermeow.session.v1.SessionService/Connect"
-	SessionService_PairPhone_FullMethodName  = "/zappermeow.session.v1.SessionService/PairPhone"
-	SessionService_Disconnect_FullMethodName = "/zappermeow.session.v1.SessionService/Disconnect"
-	SessionService_Logout_FullMethodName     = "/zappermeow.session.v1.SessionService/Logout"
-	SessionService_GetStatus_FullMethodName  = "/zappermeow.session.v1.SessionService/GetStatus"
+	SessionService_Connect_FullMethodName                      = "/zappermeow.session.v1.SessionService/Connect"
+	SessionService_PairPhone_FullMethodName                    = "/zappermeow.session.v1.SessionService/PairPhone"
+	SessionService_Disconnect_FullMethodName                   = "/zappermeow.session.v1.SessionService/Disconnect"
+	SessionService_Logout_FullMethodName                       = "/zappermeow.session.v1.SessionService/Logout"
+	SessionService_GetStatus_FullMethodName                    = "/zappermeow.session.v1.SessionService/GetStatus"
+	SessionService_ApplySettings_FullMethodName                = "/zappermeow.session.v1.SessionService/ApplySettings"
+	SessionService_SubmitPasskeyResponse_FullMethodName        = "/zappermeow.session.v1.SessionService/SubmitPasskeyResponse"
+	SessionService_ConfirmPasskey_FullMethodName               = "/zappermeow.session.v1.SessionService/ConfirmPasskey"
+	SessionService_GetIdentityVerificationCodes_FullMethodName = "/zappermeow.session.v1.SessionService/GetIdentityVerificationCodes"
 )
 
 // SessionServiceClient is the client API for SessionService service.
@@ -49,6 +53,18 @@ type SessionServiceClient interface {
 	Logout(ctx context.Context, in *LogoutRequest, opts ...grpc.CallOption) (*LogoutResponse, error)
 	// Live view held by the owner; complements the persisted state.
 	GetStatus(ctx context.Context, in *GetStatusRequest, opts ...grpc.CallOption) (*GetStatusResponse, error)
+	// Reapplies the instance's persisted settings on the live session. The
+	// request only says what changed: the worker rereads the values from
+	// Postgres, so there is no window where the call and the database disagree.
+	ApplySettings(ctx context.Context, in *ApplySettingsRequest, opts ...grpc.CallOption) (*ApplySettingsResponse, error)
+	// Forwards the authenticator's WebAuthn assertion for the pending passkey
+	// challenge of the pairing attempt in flight.
+	SubmitPasskeyResponse(ctx context.Context, in *SubmitPasskeyResponseRequest, opts ...grpc.CallOption) (*SubmitPasskeyResponseResponse, error)
+	// Confirms the handoff code that was shown to the number's owner.
+	ConfirmPasskey(ctx context.Context, in *ConfirmPasskeyRequest, opts ...grpc.CallOption) (*ConfirmPasskeyResponse, error)
+	// Identity verification codes (safety numbers) for a conversation with one
+	// contact. Requires a connected session: it talks to WhatsApp.
+	GetIdentityVerificationCodes(ctx context.Context, in *GetIdentityVerificationCodesRequest, opts ...grpc.CallOption) (*GetIdentityVerificationCodesResponse, error)
 }
 
 type sessionServiceClient struct {
@@ -109,6 +125,46 @@ func (c *sessionServiceClient) GetStatus(ctx context.Context, in *GetStatusReque
 	return out, nil
 }
 
+func (c *sessionServiceClient) ApplySettings(ctx context.Context, in *ApplySettingsRequest, opts ...grpc.CallOption) (*ApplySettingsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplySettingsResponse)
+	err := c.cc.Invoke(ctx, SessionService_ApplySettings_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sessionServiceClient) SubmitPasskeyResponse(ctx context.Context, in *SubmitPasskeyResponseRequest, opts ...grpc.CallOption) (*SubmitPasskeyResponseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubmitPasskeyResponseResponse)
+	err := c.cc.Invoke(ctx, SessionService_SubmitPasskeyResponse_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sessionServiceClient) ConfirmPasskey(ctx context.Context, in *ConfirmPasskeyRequest, opts ...grpc.CallOption) (*ConfirmPasskeyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfirmPasskeyResponse)
+	err := c.cc.Invoke(ctx, SessionService_ConfirmPasskey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sessionServiceClient) GetIdentityVerificationCodes(ctx context.Context, in *GetIdentityVerificationCodesRequest, opts ...grpc.CallOption) (*GetIdentityVerificationCodesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetIdentityVerificationCodesResponse)
+	err := c.cc.Invoke(ctx, SessionService_GetIdentityVerificationCodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SessionServiceServer is the server API for SessionService service.
 // All implementations must embed UnimplementedSessionServiceServer
 // for forward compatibility.
@@ -126,6 +182,18 @@ type SessionServiceServer interface {
 	Logout(context.Context, *LogoutRequest) (*LogoutResponse, error)
 	// Live view held by the owner; complements the persisted state.
 	GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error)
+	// Reapplies the instance's persisted settings on the live session. The
+	// request only says what changed: the worker rereads the values from
+	// Postgres, so there is no window where the call and the database disagree.
+	ApplySettings(context.Context, *ApplySettingsRequest) (*ApplySettingsResponse, error)
+	// Forwards the authenticator's WebAuthn assertion for the pending passkey
+	// challenge of the pairing attempt in flight.
+	SubmitPasskeyResponse(context.Context, *SubmitPasskeyResponseRequest) (*SubmitPasskeyResponseResponse, error)
+	// Confirms the handoff code that was shown to the number's owner.
+	ConfirmPasskey(context.Context, *ConfirmPasskeyRequest) (*ConfirmPasskeyResponse, error)
+	// Identity verification codes (safety numbers) for a conversation with one
+	// contact. Requires a connected session: it talks to WhatsApp.
+	GetIdentityVerificationCodes(context.Context, *GetIdentityVerificationCodesRequest) (*GetIdentityVerificationCodesResponse, error)
 	mustEmbedUnimplementedSessionServiceServer()
 }
 
@@ -150,6 +218,18 @@ func (UnimplementedSessionServiceServer) Logout(context.Context, *LogoutRequest)
 }
 func (UnimplementedSessionServiceServer) GetStatus(context.Context, *GetStatusRequest) (*GetStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetStatus not implemented")
+}
+func (UnimplementedSessionServiceServer) ApplySettings(context.Context, *ApplySettingsRequest) (*ApplySettingsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplySettings not implemented")
+}
+func (UnimplementedSessionServiceServer) SubmitPasskeyResponse(context.Context, *SubmitPasskeyResponseRequest) (*SubmitPasskeyResponseResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubmitPasskeyResponse not implemented")
+}
+func (UnimplementedSessionServiceServer) ConfirmPasskey(context.Context, *ConfirmPasskeyRequest) (*ConfirmPasskeyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfirmPasskey not implemented")
+}
+func (UnimplementedSessionServiceServer) GetIdentityVerificationCodes(context.Context, *GetIdentityVerificationCodesRequest) (*GetIdentityVerificationCodesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetIdentityVerificationCodes not implemented")
 }
 func (UnimplementedSessionServiceServer) mustEmbedUnimplementedSessionServiceServer() {}
 func (UnimplementedSessionServiceServer) testEmbeddedByValue()                        {}
@@ -262,6 +342,78 @@ func _SessionService_GetStatus_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SessionService_ApplySettings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplySettingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).ApplySettings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_ApplySettings_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).ApplySettings(ctx, req.(*ApplySettingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SessionService_SubmitPasskeyResponse_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubmitPasskeyResponseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).SubmitPasskeyResponse(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_SubmitPasskeyResponse_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).SubmitPasskeyResponse(ctx, req.(*SubmitPasskeyResponseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SessionService_ConfirmPasskey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfirmPasskeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).ConfirmPasskey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_ConfirmPasskey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).ConfirmPasskey(ctx, req.(*ConfirmPasskeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SessionService_GetIdentityVerificationCodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetIdentityVerificationCodesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SessionServiceServer).GetIdentityVerificationCodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SessionService_GetIdentityVerificationCodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SessionServiceServer).GetIdentityVerificationCodes(ctx, req.(*GetIdentityVerificationCodesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SessionService_ServiceDesc is the grpc.ServiceDesc for SessionService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -288,6 +440,22 @@ var SessionService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetStatus",
 			Handler:    _SessionService_GetStatus_Handler,
+		},
+		{
+			MethodName: "ApplySettings",
+			Handler:    _SessionService_ApplySettings_Handler,
+		},
+		{
+			MethodName: "SubmitPasskeyResponse",
+			Handler:    _SessionService_SubmitPasskeyResponse_Handler,
+		},
+		{
+			MethodName: "ConfirmPasskey",
+			Handler:    _SessionService_ConfirmPasskey_Handler,
+		},
+		{
+			MethodName: "GetIdentityVerificationCodes",
+			Handler:    _SessionService_GetIdentityVerificationCodes_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

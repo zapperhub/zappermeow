@@ -57,7 +57,7 @@ func (q *Queries) ClearDeviceMaterial(ctx context.Context, id uuid.UUID) error {
 }
 
 const getInstanceConnection = `-- name: GetInstanceConnection :one
-SELECT id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at FROM instances WHERE id = $1 AND tenant_id = $2
+SELECT id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at, proxy_url, passive_mode FROM instances WHERE id = $1 AND tenant_id = $2
 `
 
 type GetInstanceConnectionParams struct {
@@ -87,12 +87,14 @@ func (q *Queries) GetInstanceConnection(ctx context.Context, arg GetInstanceConn
 		&i.LastDisconnectAt,
 		&i.LastDisconnectReason,
 		&i.BanExpiresAt,
+		&i.ProxyUrl,
+		&i.PassiveMode,
 	)
 	return i, err
 }
 
 const getInstanceConnectionByID = `-- name: GetInstanceConnectionByID :one
-SELECT id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at FROM instances WHERE id = $1
+SELECT id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at, proxy_url, passive_mode FROM instances WHERE id = $1
 `
 
 // Worker-side lookup: the owner acts on an instance it holds a lease for, and
@@ -119,7 +121,28 @@ func (q *Queries) GetInstanceConnectionByID(ctx context.Context, id uuid.UUID) (
 		&i.LastDisconnectAt,
 		&i.LastDisconnectReason,
 		&i.BanExpiresAt,
+		&i.ProxyUrl,
+		&i.PassiveMode,
 	)
+	return i, err
+}
+
+const getInstanceSettings = `-- name: GetInstanceSettings :one
+SELECT proxy_url, passive_mode FROM instances WHERE id = $1
+`
+
+type GetInstanceSettingsRow struct {
+	ProxyUrl    *string
+	PassiveMode bool
+}
+
+// What the worker rereads when told settings changed. Keeping the read here,
+// rather than shipping the values over gRPC, removes the window where the
+// command and the database could disagree.
+func (q *Queries) GetInstanceSettings(ctx context.Context, id uuid.UUID) (GetInstanceSettingsRow, error) {
+	row := q.db.QueryRow(ctx, getInstanceSettings, id)
+	var i GetInstanceSettingsRow
+	err := row.Scan(&i.ProxyUrl, &i.PassiveMode)
 	return i, err
 }
 
@@ -242,7 +265,7 @@ SET connection_intent = $2,
     last_disconnect_reason = CASE WHEN $3::boolean THEN NULL ELSE last_disconnect_reason END,
     updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at
+RETURNING id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at, proxy_url, passive_mode
 `
 
 type SetConnectionIntentParams struct {
@@ -278,6 +301,8 @@ func (q *Queries) SetConnectionIntent(ctx context.Context, arg SetConnectionInte
 		&i.LastDisconnectAt,
 		&i.LastDisconnectReason,
 		&i.BanExpiresAt,
+		&i.ProxyUrl,
+		&i.PassiveMode,
 	)
 	return i, err
 }
@@ -335,5 +360,41 @@ func (q *Queries) SetDeviceIdentity(ctx context.Context, arg SetDeviceIdentityPa
 		arg.Platform,
 		arg.BusinessName,
 	)
+	return err
+}
+
+const setInstancePassiveMode = `-- name: SetInstancePassiveMode :exec
+UPDATE instances
+SET passive_mode = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type SetInstancePassiveModeParams struct {
+	ID          uuid.UUID
+	PassiveMode bool
+}
+
+func (q *Queries) SetInstancePassiveMode(ctx context.Context, arg SetInstancePassiveModeParams) error {
+	_, err := q.db.Exec(ctx, setInstancePassiveMode, arg.ID, arg.PassiveMode)
+	return err
+}
+
+const setInstanceProxy = `-- name: SetInstanceProxy :exec
+UPDATE instances
+SET proxy_url = $2,
+    updated_at = now()
+WHERE id = $1
+`
+
+type SetInstanceProxyParams struct {
+	ID       uuid.UUID
+	ProxyUrl *string
+}
+
+// The raw URL, credentials included. Only the worker reads it back to build a
+// client; every path that faces a tenant masks it first.
+func (q *Queries) SetInstanceProxy(ctx context.Context, arg SetInstanceProxyParams) error {
+	_, err := q.db.Exec(ctx, setInstanceProxy, arg.ID, arg.ProxyUrl)
 	return err
 }

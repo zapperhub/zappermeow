@@ -107,6 +107,35 @@ var (
 		Help:      "Sessions replaced elsewhere. Non-zero means exclusive ownership was violated.",
 	})
 
+	// ProxyConnectFailures counts connections that failed while dialling
+	// through a configured proxy. There is no direct-connection fallback, so a
+	// rising count means a tenant's proxy is down and their number is offline.
+	ProxyConnectFailures = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "zappermeow",
+		Subsystem: "proxy",
+		Name:      "connect_failures_total",
+		Help:      "Connection attempts that failed through a configured egress proxy.",
+	})
+
+	// PasskeyPairings counts pairing attempts that went through the passkey
+	// step, by outcome.
+	PasskeyPairings = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "zappermeow",
+		Subsystem: "sessions",
+		Name:      "passkey_pairings_total",
+		Help:      "Pairing attempts that required the passkey step, by outcome.",
+	}, []string{"outcome"})
+
+	// StreamErrors counts stream closures with a code the library does not
+	// recognise, labelled by that code. Cardinality is bounded by the server's
+	// vocabulary, not by the fleet size, so no per-instance label is added.
+	StreamErrors = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "zappermeow",
+		Subsystem: "sessions",
+		Name:      "stream_errors_total",
+		Help:      "Stream closures with an unknown error code, by code.",
+	}, []string{"code"})
+
 	// WebSocketClients reports how many event-channel listeners are attached.
 	WebSocketClients = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "zappermeow",
@@ -154,6 +183,9 @@ func init() {
 		LeaseAcquisitions,
 		LeaseLosses,
 		StreamReplaced,
+		ProxyConnectFailures,
+		PasskeyPairings,
+		StreamErrors,
 		WebSocketClients,
 		RateLimitRejections,
 		APIKeysActive,

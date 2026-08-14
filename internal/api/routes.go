@@ -112,6 +112,10 @@ func (s *Server) RegisterRoutes(deps RouteDeps) {
 		connectionHandler.Register(connectionGroup)
 		connectionHandler.RegisterQueries(connectionGroup)
 
+		// Same group, so the route inherits the connection authenticator and the
+		// rate limiter; the handler is what narrows it to the instance's own key.
+		handlers.NewVerificationHandler(connections).Register(connectionGroup)
+
 		// Deleting an instance must not leave a live session behind, and
 		// suspending a tenant must actually take its numbers offline.
 		instances.WithSessions(connections)

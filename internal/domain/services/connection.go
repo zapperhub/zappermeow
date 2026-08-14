@@ -150,6 +150,180 @@ func (s *ConnectionService) Disconnect(ctx context.Context, instanceID domain.ID
 	return domain.InstanceDisconnected, nil
 }
 
+// SettingsResult reports the stored setting and whether it reached the live
+// session. It never carries the raw proxy URL.
+type SettingsResult struct {
+	// ProxyURL is the masked form, empty when no proxy is configured.
+	ProxyURL string
+	// Reconnecting is true when a live session was told to relink.
+	Reconnecting bool
+	// PassiveMode and PassiveApplied describe the stored and applied state.
+	PassiveMode    bool
+	PassiveApplied bool
+}
+
+// SetProxy stores the egress proxy and, when a session is running, tells its
+// owner to relink through it.
+//
+// The write comes first on purpose. If this process dies between the two steps,
+// the configuration is already the one every later start reads — the command to
+// the owner only shortens the wait, it is not what makes the setting take
+// effect (research R2).
+func (s *ConnectionService) SetProxy(ctx context.Context, instanceID domain.ID, rawURL string) (SettingsResult, error) {
+	if err := domain.ValidateProxyURL("body.url", rawURL); err != nil {
+		return SettingsResult{}, err
+	}
+	normalized := domain.NormalizeProxyURL(rawURL)
+
+	if err := s.queries.SetInstanceProxy(ctx, store.SetInstanceProxyParams{
+		ID:       instanceID,
+		ProxyUrl: &normalized,
+	}); err != nil {
+		return SettingsResult{}, domain.ErrInternal(err)
+	}
+
+	masked := domain.MaskProxyURL(normalized)
+	s.recordSettingsChange(ctx, instanceID, domain.ConnEventProxyUpdated, map[string]any{"proxy": masked})
+
+	return SettingsResult{
+		ProxyURL:     masked,
+		Reconnecting: s.applySettings(ctx, instanceID, true, false).Reconnecting,
+	}, nil
+}
+
+// ClearProxy removes the proxy, putting the instance back on direct
+// connections, and relinks a running session.
+func (s *ConnectionService) ClearProxy(ctx context.Context, instanceID domain.ID) (SettingsResult, error) {
+	if err := s.queries.SetInstanceProxy(ctx, store.SetInstanceProxyParams{
+		ID:       instanceID,
+		ProxyUrl: nil,
+	}); err != nil {
+		return SettingsResult{}, domain.ErrInternal(err)
+	}
+
+	s.recordSettingsChange(ctx, instanceID, domain.ConnEventProxyUpdated, map[string]any{"proxy": nil})
+
+	return SettingsResult{
+		Reconnecting: s.applySettings(ctx, instanceID, true, false).Reconnecting,
+	}, nil
+}
+
+// SetPassiveMode stores the passive-mode choice and applies it to a live
+// session. With no session running the value simply waits: the next connection
+// applies it through the same path (research R6).
+func (s *ConnectionService) SetPassiveMode(ctx context.Context, instanceID domain.ID, enabled bool) (SettingsResult, error) {
+	if err := s.queries.SetInstancePassiveMode(ctx, store.SetInstancePassiveModeParams{
+		ID:          instanceID,
+		PassiveMode: enabled,
+	}); err != nil {
+		return SettingsResult{}, domain.ErrInternal(err)
+	}
+
+	s.recordSettingsChange(ctx, instanceID, domain.ConnEventPassiveModeUpdated, map[string]any{"passive": enabled})
+
+	return SettingsResult{
+		PassiveMode:    enabled,
+		PassiveApplied: s.applySettings(ctx, instanceID, false, true).PassiveApplied,
+	}, nil
+}
+
+// applySettings commands the current owner, if there is one.
+//
+// A failure here is deliberately not an error for the caller: the setting is
+// stored, and reconciliation or the next connect picks it up. Turning a missing
+// owner into a failed request would tell the tenant their change was rejected
+// when it was in fact saved.
+func (s *ConnectionService) applySettings(ctx context.Context, instanceID domain.ID, proxyChanged, passiveChanged bool) SettingsResult {
+	resp, err := s.sessions.ApplySettings(ctx, instanceID, proxyChanged, passiveChanged)
+	if err != nil {
+		if !errors.Is(err, sessionclient.ErrNoOwner) {
+			s.logger.Warn("applying settings on the live session failed; the stored value still applies on the next connection",
+				slog.String("instance_id", instanceID.String()),
+				slog.String("error", err.Error()))
+		}
+		return SettingsResult{}
+	}
+	return SettingsResult{
+		Reconnecting:   resp.GetReconnecting(),
+		PassiveApplied: resp.GetPassiveApplied(),
+	}
+}
+
+// recordSettingsChange writes the trail entry for a configuration change. The
+// detail is already masked by the caller: nothing here may carry a secret.
+func (s *ConnectionService) recordSettingsChange(
+	ctx context.Context,
+	instanceID domain.ID,
+	eventType domain.ConnectionEventType,
+	detail map[string]any,
+) {
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		s.logger.Error("encoding settings trail detail failed",
+			slog.String("instance_id", instanceID.String()),
+			slog.String("error", err.Error()))
+		return
+	}
+	if _, err := s.queries.AppendConnectionEvent(ctx, store.AppendConnectionEventParams{
+		InstanceID: instanceID,
+		Type:       string(eventType),
+		Detail:     encoded,
+	}); err != nil {
+		s.logger.Error("recording settings change failed",
+			slog.String("instance_id", instanceID.String()),
+			slog.String("error", err.Error()))
+	}
+}
+
+// SubmitPasskeyResponse forwards the authenticator's assertion for the pairing
+// attempt in flight. The payload is opaque: only the library knows how to read
+// it, and parsing it here would couple the API to a WebAuthn shape it has no
+// reason to understand.
+func (s *ConnectionService) SubmitPasskeyResponse(ctx context.Context, instanceID domain.ID, webauthnJSON []byte) error {
+	if _, err := s.sessions.SubmitPasskeyResponse(ctx, instanceID, webauthnJSON); err != nil {
+		return translateSessionError(err)
+	}
+	return nil
+}
+
+// ConfirmPasskey confirms the handoff code was shown to the number's owner and
+// acknowledged.
+func (s *ConnectionService) ConfirmPasskey(ctx context.Context, instanceID domain.ID) error {
+	if _, err := s.sessions.ConfirmPasskey(ctx, instanceID); err != nil {
+		return translateSessionError(err)
+	}
+	return nil
+}
+
+// VerificationCodes is the safety-number material for one conversation.
+type VerificationCodes struct {
+	LID            string
+	PhoneNumber    string
+	Username       string
+	NumericCode    string
+	DisplayQR      []byte
+	VerificationQR []byte
+}
+
+// IdentityVerificationCodes reads the safety numbers for a conversation with a
+// contact. Nothing is stored: the codes change whenever an identity changes, so
+// a cached answer would eventually be a wrong one — and a wrong safety number
+// is worse than none.
+func (s *ConnectionService) IdentityVerificationCodes(ctx context.Context, instanceID domain.ID, contact string) (VerificationCodes, error) {
+	resp, err := s.sessions.IdentityVerificationCodes(ctx, instanceID, contact)
+	if err != nil {
+		return VerificationCodes{}, translateSessionError(err)
+	}
+	return VerificationCodes{
+		LID:            resp.GetLid(),
+		PhoneNumber:    resp.GetPhoneNumber(),
+		Username:       resp.GetUsername(),
+		NumericCode:    resp.GetNumericCode(),
+		DisplayQR:      resp.GetDisplayQr(),
+		VerificationQR: resp.GetVerificationQr(),
+	}, nil
+}
+
 // LogoutResult reports what the logout actually achieved.
 type LogoutResult struct {
 	State domain.InstanceState
@@ -403,6 +577,13 @@ func (s *ConnectionService) setStateDirect(ctx context.Context, instanceID domai
 // translateSessionError maps the worker's gRPC codes onto domain errors, which
 // httperr then renders as problem details.
 func translateSessionError(err error) error {
+	// No owner is not an internal failure: no worker holds the session, so the
+	// command has nowhere to go. Callers that treat that as success — a
+	// disconnect, say — check for it before getting here.
+	if errors.Is(err, sessionclient.ErrNoOwner) {
+		return domain.ErrSessionUnavailable()
+	}
+
 	st, ok := status.FromError(err)
 	if !ok {
 		return domain.ErrInternal(err)
@@ -428,6 +609,24 @@ func translateSessionError(err error) error {
 		return domain.ErrInvalidPhoneNumber()
 	case "PAIRING_IN_PROGRESS":
 		return domain.ErrPairingInProgress()
+
+	// Connection extras (feature 003). Each maps to a specific answer: a caller
+	// that submitted a passkey response too late needs to hear that, not a
+	// generic "the session is unavailable".
+	case "NO_PASSKEY_CHALLENGE":
+		return domain.ErrNoPasskeyChallenge()
+	case "NO_PASSKEY_CODE":
+		return domain.ErrNoPasskeyCode()
+	case "INSTANCE_NOT_CONNECTED":
+		return domain.ErrInstanceNotConnected()
+	case "INVALID_CONTACT":
+		return domain.ErrInvalidContact()
+	case "IDENTITY_NOT_RESOLVABLE":
+		return domain.ErrIdentityNotResolvable()
+	case "CANNOT_VERIFY_SELF":
+		return domain.ErrCannotVerifySelf()
+	case "CONTACT_UNAVAILABLE":
+		return domain.ErrContactUnavailable()
 	}
 
 	switch st.Code() {
@@ -476,6 +675,13 @@ type ConnectionStatus struct {
 	// Several companion devices of one number is legitimate, so this is
 	// context, never a conflict (FR-018).
 	SharesNumberWith []domain.ID
+
+	// ProxyURL is the masked egress proxy, empty when the instance connects
+	// directly. The raw value never leaves the worker path.
+	ProxyURL string
+	// PassiveMode is the stored choice, not necessarily the mode in force at
+	// this instant: an instance that is offline has it stored and unapplied.
+	PassiveMode bool
 }
 
 // Status reads the connection state of an instance.
@@ -498,9 +704,15 @@ func (s *ConnectionService) Status(ctx context.Context, tenantID, instanceID dom
 		ConnectedAt:      row.ConnectedAt,
 		LastDisconnectAt: row.LastDisconnectAt,
 		BanExpiresAt:     row.BanExpiresAt,
+		PassiveMode:      row.PassiveMode,
 	}
 	if row.LastDisconnectReason != nil {
 		status.LastReason = domain.DisconnectReason(*row.LastDisconnectReason)
+	}
+	if row.ProxyUrl != nil {
+		// Masked here, at the boundary of the domain: no caller above this line
+		// is ever handed the credentials (FR-007).
+		status.ProxyURL = domain.MaskProxyURL(*row.ProxyUrl)
 	}
 
 	if row.WaJid != nil {

@@ -822,6 +822,456 @@ func (x *GetStatusResponse) GetConnectedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+type ApplySettingsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Fence *Fence                 `protobuf:"bytes,1,opt,name=fence,proto3" json:"fence,omitempty"`
+	// Relink the session using the proxy reread from the database. The proxy
+	// only takes effect on the websocket at connection time, so applying it
+	// means reconnecting.
+	ProxyChanged bool `protobuf:"varint,2,opt,name=proxy_changed,json=proxyChanged,proto3" json:"proxy_changed,omitempty"`
+	// Apply passive mode on the live session.
+	PassiveChanged bool `protobuf:"varint,3,opt,name=passive_changed,json=passiveChanged,proto3" json:"passive_changed,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ApplySettingsRequest) Reset() {
+	*x = ApplySettingsRequest{}
+	mi := &file_session_v1_session_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplySettingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplySettingsRequest) ProtoMessage() {}
+
+func (x *ApplySettingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_session_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplySettingsRequest.ProtoReflect.Descriptor instead.
+func (*ApplySettingsRequest) Descriptor() ([]byte, []int) {
+	return file_session_v1_session_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ApplySettingsRequest) GetFence() *Fence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *ApplySettingsRequest) GetProxyChanged() bool {
+	if x != nil {
+		return x.ProxyChanged
+	}
+	return false
+}
+
+func (x *ApplySettingsRequest) GetPassiveChanged() bool {
+	if x != nil {
+		return x.PassiveChanged
+	}
+	return false
+}
+
+type ApplySettingsResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	State          SessionState           `protobuf:"varint,1,opt,name=state,proto3,enum=zappermeow.session.v1.SessionState" json:"state,omitempty"`
+	Reconnecting   bool                   `protobuf:"varint,2,opt,name=reconnecting,proto3" json:"reconnecting,omitempty"`
+	PassiveApplied bool                   `protobuf:"varint,3,opt,name=passive_applied,json=passiveApplied,proto3" json:"passive_applied,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *ApplySettingsResponse) Reset() {
+	*x = ApplySettingsResponse{}
+	mi := &file_session_v1_session_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplySettingsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplySettingsResponse) ProtoMessage() {}
+
+func (x *ApplySettingsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_session_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplySettingsResponse.ProtoReflect.Descriptor instead.
+func (*ApplySettingsResponse) Descriptor() ([]byte, []int) {
+	return file_session_v1_session_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ApplySettingsResponse) GetState() SessionState {
+	if x != nil {
+		return x.State
+	}
+	return SessionState_SESSION_STATE_UNSPECIFIED
+}
+
+func (x *ApplySettingsResponse) GetReconnecting() bool {
+	if x != nil {
+		return x.Reconnecting
+	}
+	return false
+}
+
+func (x *ApplySettingsResponse) GetPassiveApplied() bool {
+	if x != nil {
+		return x.PassiveApplied
+	}
+	return false
+}
+
+type SubmitPasskeyResponseRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Fence *Fence                 `protobuf:"bytes,1,opt,name=fence,proto3" json:"fence,omitempty"`
+	// The WebAuthn assertion as JSON, opaque to the platform: only the wa
+	// boundary knows how to turn it into the library's type.
+	WebauthnResponseJson []byte `protobuf:"bytes,2,opt,name=webauthn_response_json,json=webauthnResponseJson,proto3" json:"webauthn_response_json,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *SubmitPasskeyResponseRequest) Reset() {
+	*x = SubmitPasskeyResponseRequest{}
+	mi := &file_session_v1_session_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitPasskeyResponseRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitPasskeyResponseRequest) ProtoMessage() {}
+
+func (x *SubmitPasskeyResponseRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_session_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitPasskeyResponseRequest.ProtoReflect.Descriptor instead.
+func (*SubmitPasskeyResponseRequest) Descriptor() ([]byte, []int) {
+	return file_session_v1_session_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *SubmitPasskeyResponseRequest) GetFence() *Fence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *SubmitPasskeyResponseRequest) GetWebauthnResponseJson() []byte {
+	if x != nil {
+		return x.WebauthnResponseJson
+	}
+	return nil
+}
+
+type SubmitPasskeyResponseResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// State of the attempt after the assertion was forwarded. What comes next
+	// (a handoff code, or an automatic confirmation) arrives as an event.
+	State         SessionState `protobuf:"varint,1,opt,name=state,proto3,enum=zappermeow.session.v1.SessionState" json:"state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmitPasskeyResponseResponse) Reset() {
+	*x = SubmitPasskeyResponseResponse{}
+	mi := &file_session_v1_session_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitPasskeyResponseResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitPasskeyResponseResponse) ProtoMessage() {}
+
+func (x *SubmitPasskeyResponseResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_session_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitPasskeyResponseResponse.ProtoReflect.Descriptor instead.
+func (*SubmitPasskeyResponseResponse) Descriptor() ([]byte, []int) {
+	return file_session_v1_session_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *SubmitPasskeyResponseResponse) GetState() SessionState {
+	if x != nil {
+		return x.State
+	}
+	return SessionState_SESSION_STATE_UNSPECIFIED
+}
+
+type ConfirmPasskeyRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fence         *Fence                 `protobuf:"bytes,1,opt,name=fence,proto3" json:"fence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfirmPasskeyRequest) Reset() {
+	*x = ConfirmPasskeyRequest{}
+	mi := &file_session_v1_session_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfirmPasskeyRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfirmPasskeyRequest) ProtoMessage() {}
+
+func (x *ConfirmPasskeyRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_session_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfirmPasskeyRequest.ProtoReflect.Descriptor instead.
+func (*ConfirmPasskeyRequest) Descriptor() ([]byte, []int) {
+	return file_session_v1_session_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ConfirmPasskeyRequest) GetFence() *Fence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+type ConfirmPasskeyResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	State         SessionState           `protobuf:"varint,1,opt,name=state,proto3,enum=zappermeow.session.v1.SessionState" json:"state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfirmPasskeyResponse) Reset() {
+	*x = ConfirmPasskeyResponse{}
+	mi := &file_session_v1_session_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfirmPasskeyResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfirmPasskeyResponse) ProtoMessage() {}
+
+func (x *ConfirmPasskeyResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_session_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfirmPasskeyResponse.ProtoReflect.Descriptor instead.
+func (*ConfirmPasskeyResponse) Descriptor() ([]byte, []int) {
+	return file_session_v1_session_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ConfirmPasskeyResponse) GetState() SessionState {
+	if x != nil {
+		return x.State
+	}
+	return SessionState_SESSION_STATE_UNSPECIFIED
+}
+
+type GetIdentityVerificationCodesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Fence *Fence                 `protobuf:"bytes,1,opt,name=fence,proto3" json:"fence,omitempty"`
+	// "<user>@lid" or a phone number in E.164 without '+'. Phone numbers are
+	// resolved to a LID by the worker, which is where the session store lives.
+	Contact       string `protobuf:"bytes,2,opt,name=contact,proto3" json:"contact,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetIdentityVerificationCodesRequest) Reset() {
+	*x = GetIdentityVerificationCodesRequest{}
+	mi := &file_session_v1_session_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetIdentityVerificationCodesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetIdentityVerificationCodesRequest) ProtoMessage() {}
+
+func (x *GetIdentityVerificationCodesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_session_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetIdentityVerificationCodesRequest.ProtoReflect.Descriptor instead.
+func (*GetIdentityVerificationCodesRequest) Descriptor() ([]byte, []int) {
+	return file_session_v1_session_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *GetIdentityVerificationCodesRequest) GetFence() *Fence {
+	if x != nil {
+		return x.Fence
+	}
+	return nil
+}
+
+func (x *GetIdentityVerificationCodesRequest) GetContact() string {
+	if x != nil {
+		return x.Contact
+	}
+	return ""
+}
+
+type GetIdentityVerificationCodesResponse struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Lid            string                 `protobuf:"bytes,1,opt,name=lid,proto3" json:"lid,omitempty"`
+	PhoneNumber    string                 `protobuf:"bytes,2,opt,name=phone_number,json=phoneNumber,proto3" json:"phone_number,omitempty"` // empty when unknown
+	Username       string                 `protobuf:"bytes,3,opt,name=username,proto3" json:"username,omitempty"`                          // empty when unknown
+	NumericCode    string                 `protobuf:"bytes,4,opt,name=numeric_code,json=numericCode,proto3" json:"numeric_code,omitempty"` // 60 digits
+	DisplayQr      []byte                 `protobuf:"bytes,5,opt,name=display_qr,json=displayQr,proto3" json:"display_qr,omitempty"`
+	VerificationQr []byte                 `protobuf:"bytes,6,opt,name=verification_qr,json=verificationQr,proto3" json:"verification_qr,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *GetIdentityVerificationCodesResponse) Reset() {
+	*x = GetIdentityVerificationCodesResponse{}
+	mi := &file_session_v1_session_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetIdentityVerificationCodesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetIdentityVerificationCodesResponse) ProtoMessage() {}
+
+func (x *GetIdentityVerificationCodesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_session_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetIdentityVerificationCodesResponse.ProtoReflect.Descriptor instead.
+func (*GetIdentityVerificationCodesResponse) Descriptor() ([]byte, []int) {
+	return file_session_v1_session_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *GetIdentityVerificationCodesResponse) GetLid() string {
+	if x != nil {
+		return x.Lid
+	}
+	return ""
+}
+
+func (x *GetIdentityVerificationCodesResponse) GetPhoneNumber() string {
+	if x != nil {
+		return x.PhoneNumber
+	}
+	return ""
+}
+
+func (x *GetIdentityVerificationCodesResponse) GetUsername() string {
+	if x != nil {
+		return x.Username
+	}
+	return ""
+}
+
+func (x *GetIdentityVerificationCodesResponse) GetNumericCode() string {
+	if x != nil {
+		return x.NumericCode
+	}
+	return ""
+}
+
+func (x *GetIdentityVerificationCodesResponse) GetDisplayQr() []byte {
+	if x != nil {
+		return x.DisplayQr
+	}
+	return nil
+}
+
+func (x *GetIdentityVerificationCodesResponse) GetVerificationQr() []byte {
+	if x != nil {
+		return x.VerificationQr
+	}
+	return nil
+}
+
 var File_session_v1_session_proto protoreflect.FileDescriptor
 
 const file_session_v1_session_proto_rawDesc = "" +
@@ -872,7 +1322,35 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\tconnected\x18\x03 \x01(\bR\tconnected\x12\x1b\n" +
 	"\tlogged_in\x18\x04 \x01(\bR\bloggedIn\x12K\n" +
 	"\x0epairing_method\x18\x05 \x01(\x0e2$.zappermeow.session.v1.PairingMethodR\rpairingMethod\x12=\n" +
-	"\fconnected_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\vconnectedAt*\xf9\x01\n" +
+	"\fconnected_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\vconnectedAt\"\x98\x01\n" +
+	"\x14ApplySettingsRequest\x122\n" +
+	"\x05fence\x18\x01 \x01(\v2\x1c.zappermeow.session.v1.FenceR\x05fence\x12#\n" +
+	"\rproxy_changed\x18\x02 \x01(\bR\fproxyChanged\x12'\n" +
+	"\x0fpassive_changed\x18\x03 \x01(\bR\x0epassiveChanged\"\x9f\x01\n" +
+	"\x15ApplySettingsResponse\x129\n" +
+	"\x05state\x18\x01 \x01(\x0e2#.zappermeow.session.v1.SessionStateR\x05state\x12\"\n" +
+	"\freconnecting\x18\x02 \x01(\bR\freconnecting\x12'\n" +
+	"\x0fpassive_applied\x18\x03 \x01(\bR\x0epassiveApplied\"\x88\x01\n" +
+	"\x1cSubmitPasskeyResponseRequest\x122\n" +
+	"\x05fence\x18\x01 \x01(\v2\x1c.zappermeow.session.v1.FenceR\x05fence\x124\n" +
+	"\x16webauthn_response_json\x18\x02 \x01(\fR\x14webauthnResponseJson\"Z\n" +
+	"\x1dSubmitPasskeyResponseResponse\x129\n" +
+	"\x05state\x18\x01 \x01(\x0e2#.zappermeow.session.v1.SessionStateR\x05state\"K\n" +
+	"\x15ConfirmPasskeyRequest\x122\n" +
+	"\x05fence\x18\x01 \x01(\v2\x1c.zappermeow.session.v1.FenceR\x05fence\"S\n" +
+	"\x16ConfirmPasskeyResponse\x129\n" +
+	"\x05state\x18\x01 \x01(\x0e2#.zappermeow.session.v1.SessionStateR\x05state\"s\n" +
+	"#GetIdentityVerificationCodesRequest\x122\n" +
+	"\x05fence\x18\x01 \x01(\v2\x1c.zappermeow.session.v1.FenceR\x05fence\x12\x18\n" +
+	"\acontact\x18\x02 \x01(\tR\acontact\"\xe2\x01\n" +
+	"$GetIdentityVerificationCodesResponse\x12\x10\n" +
+	"\x03lid\x18\x01 \x01(\tR\x03lid\x12!\n" +
+	"\fphone_number\x18\x02 \x01(\tR\vphoneNumber\x12\x1a\n" +
+	"\busername\x18\x03 \x01(\tR\busername\x12!\n" +
+	"\fnumeric_code\x18\x04 \x01(\tR\vnumericCode\x12\x1d\n" +
+	"\n" +
+	"display_qr\x18\x05 \x01(\fR\tdisplayQr\x12'\n" +
+	"\x0fverification_qr\x18\x06 \x01(\fR\x0everificationQr*\xf9\x01\n" +
 	"\fSessionState\x12\x1d\n" +
 	"\x19SESSION_STATE_UNSPECIFIED\x10\x00\x12\x1c\n" +
 	"\x18SESSION_STATE_REGISTERED\x10\x01\x12\x19\n" +
@@ -885,14 +1363,18 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\rPairingMethod\x12\x1e\n" +
 	"\x1aPAIRING_METHOD_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11PAIRING_METHOD_QR\x10\x01\x12\x18\n" +
-	"\x14PAIRING_METHOD_PHONE\x10\x022\xe4\x03\n" +
+	"\x14PAIRING_METHOD_PHONE\x10\x022\xde\a\n" +
 	"\x0eSessionService\x12X\n" +
 	"\aConnect\x12%.zappermeow.session.v1.ConnectRequest\x1a&.zappermeow.session.v1.ConnectResponse\x12^\n" +
 	"\tPairPhone\x12'.zappermeow.session.v1.PairPhoneRequest\x1a(.zappermeow.session.v1.PairPhoneResponse\x12a\n" +
 	"\n" +
 	"Disconnect\x12(.zappermeow.session.v1.DisconnectRequest\x1a).zappermeow.session.v1.DisconnectResponse\x12U\n" +
 	"\x06Logout\x12$.zappermeow.session.v1.LogoutRequest\x1a%.zappermeow.session.v1.LogoutResponse\x12^\n" +
-	"\tGetStatus\x12'.zappermeow.session.v1.GetStatusRequest\x1a(.zappermeow.session.v1.GetStatusResponseBAZ?github.com/zapperhub/zappermeow/internal/pb/sessionv1;sessionv1b\x06proto3"
+	"\tGetStatus\x12'.zappermeow.session.v1.GetStatusRequest\x1a(.zappermeow.session.v1.GetStatusResponse\x12j\n" +
+	"\rApplySettings\x12+.zappermeow.session.v1.ApplySettingsRequest\x1a,.zappermeow.session.v1.ApplySettingsResponse\x12\x82\x01\n" +
+	"\x15SubmitPasskeyResponse\x123.zappermeow.session.v1.SubmitPasskeyResponseRequest\x1a4.zappermeow.session.v1.SubmitPasskeyResponseResponse\x12m\n" +
+	"\x0eConfirmPasskey\x12,.zappermeow.session.v1.ConfirmPasskeyRequest\x1a-.zappermeow.session.v1.ConfirmPasskeyResponse\x12\x97\x01\n" +
+	"\x1cGetIdentityVerificationCodes\x12:.zappermeow.session.v1.GetIdentityVerificationCodesRequest\x1a;.zappermeow.session.v1.GetIdentityVerificationCodesResponseBAZ?github.com/zapperhub/zappermeow/internal/pb/sessionv1;sessionv1b\x06proto3"
 
 var (
 	file_session_v1_session_proto_rawDescOnce sync.Once
@@ -907,30 +1389,38 @@ func file_session_v1_session_proto_rawDescGZIP() []byte {
 }
 
 var file_session_v1_session_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_session_v1_session_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_session_v1_session_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_session_v1_session_proto_goTypes = []any{
-	(SessionState)(0),             // 0: zappermeow.session.v1.SessionState
-	(PairingMethod)(0),            // 1: zappermeow.session.v1.PairingMethod
-	(*Fence)(nil),                 // 2: zappermeow.session.v1.Fence
-	(*DeviceIdentity)(nil),        // 3: zappermeow.session.v1.DeviceIdentity
-	(*ConnectRequest)(nil),        // 4: zappermeow.session.v1.ConnectRequest
-	(*ConnectResponse)(nil),       // 5: zappermeow.session.v1.ConnectResponse
-	(*PairPhoneRequest)(nil),      // 6: zappermeow.session.v1.PairPhoneRequest
-	(*PairPhoneResponse)(nil),     // 7: zappermeow.session.v1.PairPhoneResponse
-	(*DisconnectRequest)(nil),     // 8: zappermeow.session.v1.DisconnectRequest
-	(*DisconnectResponse)(nil),    // 9: zappermeow.session.v1.DisconnectResponse
-	(*LogoutRequest)(nil),         // 10: zappermeow.session.v1.LogoutRequest
-	(*LogoutResponse)(nil),        // 11: zappermeow.session.v1.LogoutResponse
-	(*GetStatusRequest)(nil),      // 12: zappermeow.session.v1.GetStatusRequest
-	(*GetStatusResponse)(nil),     // 13: zappermeow.session.v1.GetStatusResponse
-	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
+	(SessionState)(0),                            // 0: zappermeow.session.v1.SessionState
+	(PairingMethod)(0),                           // 1: zappermeow.session.v1.PairingMethod
+	(*Fence)(nil),                                // 2: zappermeow.session.v1.Fence
+	(*DeviceIdentity)(nil),                       // 3: zappermeow.session.v1.DeviceIdentity
+	(*ConnectRequest)(nil),                       // 4: zappermeow.session.v1.ConnectRequest
+	(*ConnectResponse)(nil),                      // 5: zappermeow.session.v1.ConnectResponse
+	(*PairPhoneRequest)(nil),                     // 6: zappermeow.session.v1.PairPhoneRequest
+	(*PairPhoneResponse)(nil),                    // 7: zappermeow.session.v1.PairPhoneResponse
+	(*DisconnectRequest)(nil),                    // 8: zappermeow.session.v1.DisconnectRequest
+	(*DisconnectResponse)(nil),                   // 9: zappermeow.session.v1.DisconnectResponse
+	(*LogoutRequest)(nil),                        // 10: zappermeow.session.v1.LogoutRequest
+	(*LogoutResponse)(nil),                       // 11: zappermeow.session.v1.LogoutResponse
+	(*GetStatusRequest)(nil),                     // 12: zappermeow.session.v1.GetStatusRequest
+	(*GetStatusResponse)(nil),                    // 13: zappermeow.session.v1.GetStatusResponse
+	(*ApplySettingsRequest)(nil),                 // 14: zappermeow.session.v1.ApplySettingsRequest
+	(*ApplySettingsResponse)(nil),                // 15: zappermeow.session.v1.ApplySettingsResponse
+	(*SubmitPasskeyResponseRequest)(nil),         // 16: zappermeow.session.v1.SubmitPasskeyResponseRequest
+	(*SubmitPasskeyResponseResponse)(nil),        // 17: zappermeow.session.v1.SubmitPasskeyResponseResponse
+	(*ConfirmPasskeyRequest)(nil),                // 18: zappermeow.session.v1.ConfirmPasskeyRequest
+	(*ConfirmPasskeyResponse)(nil),               // 19: zappermeow.session.v1.ConfirmPasskeyResponse
+	(*GetIdentityVerificationCodesRequest)(nil),  // 20: zappermeow.session.v1.GetIdentityVerificationCodesRequest
+	(*GetIdentityVerificationCodesResponse)(nil), // 21: zappermeow.session.v1.GetIdentityVerificationCodesResponse
+	(*timestamppb.Timestamp)(nil),                // 22: google.protobuf.Timestamp
 }
 var file_session_v1_session_proto_depIdxs = []int32{
 	2,  // 0: zappermeow.session.v1.ConnectRequest.fence:type_name -> zappermeow.session.v1.Fence
 	0,  // 1: zappermeow.session.v1.ConnectResponse.state:type_name -> zappermeow.session.v1.SessionState
-	14, // 2: zappermeow.session.v1.ConnectResponse.pairing_expires_at:type_name -> google.protobuf.Timestamp
+	22, // 2: zappermeow.session.v1.ConnectResponse.pairing_expires_at:type_name -> google.protobuf.Timestamp
 	2,  // 3: zappermeow.session.v1.PairPhoneRequest.fence:type_name -> zappermeow.session.v1.Fence
-	14, // 4: zappermeow.session.v1.PairPhoneResponse.expires_at:type_name -> google.protobuf.Timestamp
+	22, // 4: zappermeow.session.v1.PairPhoneResponse.expires_at:type_name -> google.protobuf.Timestamp
 	2,  // 5: zappermeow.session.v1.DisconnectRequest.fence:type_name -> zappermeow.session.v1.Fence
 	0,  // 6: zappermeow.session.v1.DisconnectResponse.state:type_name -> zappermeow.session.v1.SessionState
 	2,  // 7: zappermeow.session.v1.LogoutRequest.fence:type_name -> zappermeow.session.v1.Fence
@@ -939,22 +1429,37 @@ var file_session_v1_session_proto_depIdxs = []int32{
 	0,  // 10: zappermeow.session.v1.GetStatusResponse.state:type_name -> zappermeow.session.v1.SessionState
 	3,  // 11: zappermeow.session.v1.GetStatusResponse.device:type_name -> zappermeow.session.v1.DeviceIdentity
 	1,  // 12: zappermeow.session.v1.GetStatusResponse.pairing_method:type_name -> zappermeow.session.v1.PairingMethod
-	14, // 13: zappermeow.session.v1.GetStatusResponse.connected_at:type_name -> google.protobuf.Timestamp
-	4,  // 14: zappermeow.session.v1.SessionService.Connect:input_type -> zappermeow.session.v1.ConnectRequest
-	6,  // 15: zappermeow.session.v1.SessionService.PairPhone:input_type -> zappermeow.session.v1.PairPhoneRequest
-	8,  // 16: zappermeow.session.v1.SessionService.Disconnect:input_type -> zappermeow.session.v1.DisconnectRequest
-	10, // 17: zappermeow.session.v1.SessionService.Logout:input_type -> zappermeow.session.v1.LogoutRequest
-	12, // 18: zappermeow.session.v1.SessionService.GetStatus:input_type -> zappermeow.session.v1.GetStatusRequest
-	5,  // 19: zappermeow.session.v1.SessionService.Connect:output_type -> zappermeow.session.v1.ConnectResponse
-	7,  // 20: zappermeow.session.v1.SessionService.PairPhone:output_type -> zappermeow.session.v1.PairPhoneResponse
-	9,  // 21: zappermeow.session.v1.SessionService.Disconnect:output_type -> zappermeow.session.v1.DisconnectResponse
-	11, // 22: zappermeow.session.v1.SessionService.Logout:output_type -> zappermeow.session.v1.LogoutResponse
-	13, // 23: zappermeow.session.v1.SessionService.GetStatus:output_type -> zappermeow.session.v1.GetStatusResponse
-	19, // [19:24] is the sub-list for method output_type
-	14, // [14:19] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	22, // 13: zappermeow.session.v1.GetStatusResponse.connected_at:type_name -> google.protobuf.Timestamp
+	2,  // 14: zappermeow.session.v1.ApplySettingsRequest.fence:type_name -> zappermeow.session.v1.Fence
+	0,  // 15: zappermeow.session.v1.ApplySettingsResponse.state:type_name -> zappermeow.session.v1.SessionState
+	2,  // 16: zappermeow.session.v1.SubmitPasskeyResponseRequest.fence:type_name -> zappermeow.session.v1.Fence
+	0,  // 17: zappermeow.session.v1.SubmitPasskeyResponseResponse.state:type_name -> zappermeow.session.v1.SessionState
+	2,  // 18: zappermeow.session.v1.ConfirmPasskeyRequest.fence:type_name -> zappermeow.session.v1.Fence
+	0,  // 19: zappermeow.session.v1.ConfirmPasskeyResponse.state:type_name -> zappermeow.session.v1.SessionState
+	2,  // 20: zappermeow.session.v1.GetIdentityVerificationCodesRequest.fence:type_name -> zappermeow.session.v1.Fence
+	4,  // 21: zappermeow.session.v1.SessionService.Connect:input_type -> zappermeow.session.v1.ConnectRequest
+	6,  // 22: zappermeow.session.v1.SessionService.PairPhone:input_type -> zappermeow.session.v1.PairPhoneRequest
+	8,  // 23: zappermeow.session.v1.SessionService.Disconnect:input_type -> zappermeow.session.v1.DisconnectRequest
+	10, // 24: zappermeow.session.v1.SessionService.Logout:input_type -> zappermeow.session.v1.LogoutRequest
+	12, // 25: zappermeow.session.v1.SessionService.GetStatus:input_type -> zappermeow.session.v1.GetStatusRequest
+	14, // 26: zappermeow.session.v1.SessionService.ApplySettings:input_type -> zappermeow.session.v1.ApplySettingsRequest
+	16, // 27: zappermeow.session.v1.SessionService.SubmitPasskeyResponse:input_type -> zappermeow.session.v1.SubmitPasskeyResponseRequest
+	18, // 28: zappermeow.session.v1.SessionService.ConfirmPasskey:input_type -> zappermeow.session.v1.ConfirmPasskeyRequest
+	20, // 29: zappermeow.session.v1.SessionService.GetIdentityVerificationCodes:input_type -> zappermeow.session.v1.GetIdentityVerificationCodesRequest
+	5,  // 30: zappermeow.session.v1.SessionService.Connect:output_type -> zappermeow.session.v1.ConnectResponse
+	7,  // 31: zappermeow.session.v1.SessionService.PairPhone:output_type -> zappermeow.session.v1.PairPhoneResponse
+	9,  // 32: zappermeow.session.v1.SessionService.Disconnect:output_type -> zappermeow.session.v1.DisconnectResponse
+	11, // 33: zappermeow.session.v1.SessionService.Logout:output_type -> zappermeow.session.v1.LogoutResponse
+	13, // 34: zappermeow.session.v1.SessionService.GetStatus:output_type -> zappermeow.session.v1.GetStatusResponse
+	15, // 35: zappermeow.session.v1.SessionService.ApplySettings:output_type -> zappermeow.session.v1.ApplySettingsResponse
+	17, // 36: zappermeow.session.v1.SessionService.SubmitPasskeyResponse:output_type -> zappermeow.session.v1.SubmitPasskeyResponseResponse
+	19, // 37: zappermeow.session.v1.SessionService.ConfirmPasskey:output_type -> zappermeow.session.v1.ConfirmPasskeyResponse
+	21, // 38: zappermeow.session.v1.SessionService.GetIdentityVerificationCodes:output_type -> zappermeow.session.v1.GetIdentityVerificationCodesResponse
+	30, // [30:39] is the sub-list for method output_type
+	21, // [21:30] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_session_v1_session_proto_init() }
@@ -968,7 +1473,7 @@ func file_session_v1_session_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_v1_session_proto_rawDesc), len(file_session_v1_session_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   12,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

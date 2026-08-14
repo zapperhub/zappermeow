@@ -29,7 +29,7 @@ var (
 // than on the HyperMeow container so the supervisor can be exercised against a
 // scripted session while Postgres and Redis stay real.
 type SessionFactory interface {
-	NewSession(ctx context.Context, instanceID domain.ID, storedJID string) (wa.Session, error)
+	NewSession(ctx context.Context, instanceID domain.ID, cfg wa.SessionConfig) (wa.Session, error)
 }
 
 // Supervisor owns every session this process holds a lease for.
@@ -172,8 +172,18 @@ func (s *Supervisor) start(ctx context.Context, instanceID domain.ID, generation
 	if instance.WaJid != nil {
 		storedJID = *instance.WaJid
 	}
+	proxyURL := ""
+	if instance.ProxyUrl != nil {
+		proxyURL = *instance.ProxyUrl
+	}
 
-	session, err := s.factory.NewSession(ctx, instanceID, storedJID)
+	// The proxy is fixed when the client is built, so it is read here on every
+	// start — including the ones nobody commanded: a reconnect after a failover
+	// must come up through the same proxy as the session it replaces.
+	session, err := s.factory.NewSession(ctx, instanceID, wa.SessionConfig{
+		StoredJID: storedJID,
+		ProxyURL:  proxyURL,
+	})
 	if err != nil {
 		return fmt.Errorf("build session: %w", err)
 	}
@@ -288,6 +298,129 @@ func (s *Supervisor) Drop(ctx context.Context, instanceID domain.ID) {
 	metrics.SessionsConnected.WithLabelValues(s.leases.WorkerID()).Set(float64(s.Count()))
 	metrics.SessionReconnects.WithLabelValues("lease").Inc()
 	s.record(ctx, instanceID, domain.ConnEventLeaseLost, domain.ReasonWorkerLost, nil)
+}
+
+// SettingsResult reports what applying the instance settings actually did.
+type SettingsResult struct {
+	State          domain.InstanceState
+	Reconnecting   bool
+	PassiveApplied bool
+}
+
+// ApplySettings reapplies the instance's persisted settings on the live session.
+//
+// The values are reread from Postgres rather than carried in the request: the
+// database is what every later start reads too, so taking them from anywhere
+// else would let a command and a failover disagree about the configuration
+// (research R2).
+func (s *Supervisor) ApplySettings(ctx context.Context, instanceID domain.ID, proxyChanged, passiveChanged bool) (SettingsResult, error) {
+	managed, ok := s.lookup(instanceID)
+	if !ok {
+		return SettingsResult{}, ErrUnknownInstance
+	}
+
+	settings, err := s.queries.GetInstanceSettings(ctx, instanceID)
+	if err != nil {
+		if store.IsNoRows(err) {
+			return SettingsResult{}, ErrUnknownInstance
+		}
+		return SettingsResult{}, fmt.Errorf("load instance settings: %w", err)
+	}
+
+	result := SettingsResult{State: domain.InstanceConnecting}
+
+	// The proxy is bound to the socket at construction, so there is no way to
+	// change it on a live client: the session is rebuilt. Doing it here, in the
+	// process that holds the lease, is what keeps exclusive ownership intact
+	// (Principle III) — no second process ever touches this session.
+	if proxyChanged {
+		if err := s.relink(ctx, managed); err != nil {
+			return SettingsResult{}, err
+		}
+		result.Reconnecting = true
+		// A rebuilt session is a new one: any further command in this call would
+		// be acting on the object that was just closed.
+		return result, nil
+	}
+
+	if passiveChanged {
+		applied, err := s.applyPassiveMode(ctx, managed, settings.PassiveMode)
+		if err != nil {
+			return SettingsResult{}, err
+		}
+		result.PassiveApplied = applied
+	}
+
+	if snapshot, err := s.Status(ctx, instanceID); err == nil {
+		result.State = snapshot.State
+	}
+	return result, nil
+}
+
+// relink rebuilds a session so it comes up through the configuration currently
+// stored, and dials it again under the same lease and generation.
+func (s *Supervisor) relink(ctx context.Context, managed *managedSession) error {
+	instanceID := managed.instanceID
+	generation := managed.generation
+
+	// A pairing attempt cannot survive this: the QR on screen was minted by the
+	// socket about to be dropped, and the server will not honour it afterwards.
+	// Ending it explicitly tells the tenant to start a new attempt instead of
+	// leaving them staring at a code that silently stopped working.
+	if managed.pairingActive() {
+		s.publishPairingEnded(ctx, managed, wa.ExpiryCancelled)
+	}
+
+	if err := s.recordDisconnect(ctx, instanceID, domain.InstanceConnecting, domain.ReasonProxyUpdated, nil); err != nil {
+		s.logger.Error("recording the relink disconnect failed",
+			slog.String("instance_id", instanceID.String()),
+			slog.String("error", err.Error()))
+	}
+	// The instance row and the trail are separate writes: updating the state
+	// says nothing about the trail, and a transition the tenant cannot see
+	// afterwards is a gap in the audit, not a detail.
+	s.record(ctx, instanceID, domain.ConnEventDisconnected, domain.ReasonProxyUpdated, nil)
+	s.publish(ctx, managed, events.TypeDisconnected, map[string]any{
+		"reason": string(domain.ReasonProxyUpdated),
+	})
+
+	s.stop(instanceID)
+
+	if err := s.start(ctx, instanceID, generation); err != nil {
+		// The session is down and not replaced. Reconciliation adopts it again
+		// from the persisted intent, this time reading the new configuration,
+		// so the failure costs a delay rather than the instance.
+		return fmt.Errorf("rebuild session with new settings: %w", err)
+	}
+
+	rebuilt, ok := s.lookup(instanceID)
+	if !ok {
+		return ErrUnknownInstance
+	}
+	// start only dials on its own when the instance is paired and meant to be
+	// running; a session that was connected a moment ago always is.
+	go s.reconnect(rebuilt.ctx, rebuilt)
+	return nil
+}
+
+// applyPassiveMode pushes the desired mode onto a live session.
+//
+// It reports false when there is no connection to push it onto, which is not a
+// failure: the setting is stored, and the next Connected applies it through the
+// very same path.
+func (s *Supervisor) applyPassiveMode(ctx context.Context, managed *managedSession, passive bool) (bool, error) {
+	if !managed.session.Status().Connected {
+		return false, nil
+	}
+	if err := managed.session.SetPassive(ctx, passive); err != nil {
+		if errors.Is(err, wa.ErrNotConnected) {
+			// The socket dropped between the check and the call. Same answer as
+			// above: the stored value wins at the next Connected.
+			return false, nil
+		}
+		return false, fmt.Errorf("apply passive mode: %w", err)
+	}
+	return true, nil
 }
 
 // Connect brings a session up, pairing when there is no device material.
@@ -607,6 +740,15 @@ func (m *managedSession) pairingActive() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.pairingCancel != nil && time.Now().Before(m.pairingExpires)
+}
+
+// pairingExpiry is when the attempt in flight runs out. The passkey step does
+// not get a deadline of its own: the pairing window is shorter than the
+// library's handoff validity, so it is always the binding one (research R7).
+func (m *managedSession) pairingExpiry() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pairingExpires
 }
 
 func (m *managedSession) cancelPairing() {

@@ -82,6 +82,26 @@ SELECT id FROM instances WHERE tenant_id = $1;
 -- and nothing else, so an instance the user had disconnected stays down.
 SELECT id FROM instances WHERE tenant_id = $1 AND connection_intent = 'active';
 
+-- name: SetInstanceProxy :exec
+-- The raw URL, credentials included. Only the worker reads it back to build a
+-- client; every path that faces a tenant masks it first.
+UPDATE instances
+SET proxy_url = $2,
+    updated_at = now()
+WHERE id = $1;
+
+-- name: SetInstancePassiveMode :exec
+UPDATE instances
+SET passive_mode = $2,
+    updated_at = now()
+WHERE id = $1;
+
+-- name: GetInstanceSettings :one
+-- What the worker rereads when told settings changed. Keeping the read here,
+-- rather than shipping the values over gRPC, removes the window where the
+-- command and the database could disagree.
+SELECT proxy_url, passive_mode FROM instances WHERE id = $1;
+
 -- name: ClearDeviceMaterial :exec
 -- Drops the device identity while leaving the connection state alone.
 -- A remote logout destroys the material on both sides, so the row must stop

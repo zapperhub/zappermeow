@@ -138,6 +138,25 @@ type Instance struct {
 	LastDisconnectAt     *time.Time
 	LastDisconnectReason DisconnectReason
 	BanExpiresAt         *time.Time
+
+	// ProxyURL is the egress proxy every connection of this instance goes
+	// through, credentials included; nil means direct. It is stored raw because
+	// the library must use it on each connect, and it never reaches a tenant
+	// without MaskProxyURL.
+	ProxyURL *string
+	// PassiveMode keeps the device from announcing itself as active while still
+	// receiving everything. It is reapplied after every connection.
+	PassiveMode bool
+}
+
+// MaskedProxyURL is the only proxy representation that may leave the domain:
+// responses, events, the trail and logs all go through it. Empty when no proxy
+// is configured.
+func (i Instance) MaskedProxyURL() string {
+	if i.ProxyURL == nil {
+		return ""
+	}
+	return MaskProxyURL(*i.ProxyURL)
 }
 
 // Paired reports whether the instance has session material to reconnect with.

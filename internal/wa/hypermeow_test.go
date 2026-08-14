@@ -31,7 +31,7 @@ func newContainer(t *testing.T) *wa.Container {
 func TestNewSessionCreatesAFreshDeviceWhenUnpaired(t *testing.T) {
 	container := newContainer(t)
 
-	session, err := container.NewSession(context.Background(), domain.NewID(), "")
+	session, err := container.NewSession(context.Background(), domain.NewID(), wa.SessionConfig{})
 	require.NoError(t, err)
 	defer session.Close()
 
@@ -48,7 +48,7 @@ func TestNewSessionRecoversFromMissingDeviceMaterial(t *testing.T) {
 	container := newContainer(t)
 
 	session, err := container.NewSession(context.Background(), domain.NewID(),
-		"5511999999999:99@s.whatsapp.net")
+		wa.SessionConfig{StoredJID: "5511999999999:99@s.whatsapp.net"})
 	require.NoError(t, err, "a dangling JID must not strand the instance")
 	defer session.Close()
 
@@ -66,7 +66,7 @@ func TestNewSessionRecoversFromMissingDeviceMaterial(t *testing.T) {
 func TestNewSessionRecoversFromACorruptedJID(t *testing.T) {
 	container := newContainer(t)
 
-	session, err := container.NewSession(context.Background(), domain.NewID(), "not-a-jid")
+	session, err := container.NewSession(context.Background(), domain.NewID(), wa.SessionConfig{StoredJID: "not-a-jid"})
 	require.NoError(t, err)
 	defer session.Close()
 

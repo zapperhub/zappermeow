@@ -2,10 +2,12 @@ package wa
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +23,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/zapperhub/zappermeow/internal/domain"
+	"github.com/zapperhub/zappermeow/internal/metrics"
 )
 
 // reconnectCeiling caps the library's linear backoff, which otherwise grows two
@@ -75,12 +78,25 @@ func (c *Container) Close() error {
 	return nil
 }
 
+// SessionConfig is the per-instance configuration a session is built with.
+// Everything here is fixed for the lifetime of the client: the library applies
+// the proxy when the socket is created, so changing it means building a new
+// session, not mutating this one (research R1).
+type SessionConfig struct {
+	// StoredJID is the device material to reconnect with; empty means the
+	// instance still has to be paired.
+	StoredJID string
+	// ProxyURL is the egress proxy for this instance, empty for direct.
+	ProxyURL string
+}
+
 // NewSession builds the session for an instance. A stored JID means existing
 // device material to reconnect with; an empty one means the instance still has
 // to be paired, and a fresh device is created for the attempt (research R9).
-func (c *Container) NewSession(ctx context.Context, instanceID domain.ID, storedJID string) (Session, error) {
+func (c *Container) NewSession(ctx context.Context, instanceID domain.ID, cfg SessionConfig) (Session, error) {
 	var device *store.Device
 
+	storedJID := cfg.StoredJID
 	if storedJID != "" {
 		jid, err := types.ParseJID(storedJID)
 		if err != nil {
@@ -106,14 +122,35 @@ func (c *Container) NewSession(ctx context.Context, instanceID domain.ID, stored
 	}
 
 	session := &hypermeowSession{
-		instanceID: instanceID,
-		logger:     c.logger.With(slog.String("instance_id", instanceID.String())),
-		events:     make(chan Event, 32),
+		instanceID:      instanceID,
+		logger:          c.logger.With(slog.String("instance_id", instanceID.String())),
+		events:          make(chan Event, 32),
+		proxyConfigured: cfg.ProxyURL != "",
 	}
 
 	client := whatsmeow.NewClient(device, c.waLogger)
 	client.EnableAutoReconnect = true
 	client.AutoReconnectHook = session.reconnectHook
+
+	// One of these two calls always runs, and that is the point. Left alone the
+	// library resolves a proxy from the environment, so a worker started with
+	// https_proxy set would route every tenant that configured nothing through
+	// a proxy nobody asked for. SetProxy(nil) is what makes "no proxy" mean
+	// direct (FR-006, research R1).
+	//
+	// Both must happen before Connect: for the websocket the proxy is read when
+	// the socket is built, so changing it later means building a new session.
+	if cfg.ProxyURL != "" {
+		if err := client.SetProxyAddress(cfg.ProxyURL); err != nil {
+			// The address was validated when it was stored, so reaching here
+			// means the stored value and the dialer disagree — worth failing
+			// loudly rather than silently connecting direct.
+			return nil, fmt.Errorf("apply proxy: %w", err)
+		}
+	} else {
+		client.SetProxy(nil)
+	}
+
 	session.client = client
 	session.handlerID = client.AddEventHandler(session.handleEvent)
 
@@ -134,6 +171,55 @@ type hypermeowSession struct {
 	// permanent records that the last failure was an invalidation, which is how
 	// reconnectHook knows to stop instead of retrying forever.
 	permanent bool
+
+	// proxyConfigured marks sessions whose traffic must go through a proxy. It
+	// is what separates "the network is down" from "the tenant's proxy is
+	// down", which are the same error to the dialer and very different
+	// diagnoses to the tenant (research R3).
+	proxyConfigured bool
+
+	// passkeyPhase tracks where the passkey step of the current attempt is, so
+	// commands arriving out of order are refused here with a clear reason
+	// instead of reaching a library that is not reentrant (research R7).
+	passkeyPhase passkeyPhase
+}
+
+// passkeyPhase is the state of the passkey step within a pairing attempt.
+type passkeyPhase int
+
+const (
+	passkeyNone passkeyPhase = iota
+	// passkeyAwaitingResponse: a challenge was published, no assertion yet.
+	passkeyAwaitingResponse
+	// passkeyAwaitingConfirm: a handoff code was published, no confirmation yet.
+	passkeyAwaitingConfirm
+)
+
+func (s *hypermeowSession) setPasskeyPhase(phase passkeyPhase) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.passkeyPhase = phase
+}
+
+func (s *hypermeowSession) passkeyInFlight() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.passkeyPhase != passkeyNone
+}
+
+// marshalPasskeyChallenge encodes the library's WebAuthn public key options for
+// the tenant's authenticator. The platform passes it through untouched: only
+// the authenticator can answer it, and parsing it here would buy nothing while
+// coupling the contract to the library's struct.
+func marshalPasskeyChallenge(req *events.PairPasskeyRequest) (json.RawMessage, error) {
+	if req == nil || req.PublicKey == nil {
+		return nil, errors.New("passkey request carries no public key")
+	}
+	raw, err := json.Marshal(req.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("marshal webauthn public key: %w", err)
+	}
+	return raw, nil
 }
 
 func (s *hypermeowSession) QRChannel(ctx context.Context) (<-chan Event, error) {
@@ -194,12 +280,47 @@ func (s *hypermeowSession) pumpQR(raw <-chan whatsmeow.QRChannelItem, out chan<-
 		case "err-unexpected-state":
 			evt = Event{Kind: KindPairingFailed, Failure: FailureUnexpectedState}
 
+		case whatsmeow.QRChannelEventPasskeyRequest:
+			// WhatsApp requires the passkey step. Entering it rotates the secret
+			// that validates the QR codes already on screen, so no further code
+			// arrives for this attempt and the ones displayed are dead — the
+			// contract tells the client to stop showing them (research R7).
+			challenge, err := marshalPasskeyChallenge(item.PasskeyRequest)
+			if err != nil {
+				s.logger.Error("passkey challenge could not be encoded",
+					slog.String("error", err.Error()))
+				evt = Event{Kind: KindPairingFailed, Failure: FailurePasskeyError}
+				break
+			}
+			s.setPasskeyPhase(passkeyAwaitingResponse)
+			evt = Event{Kind: KindPasskeyChallenge, Challenge: challenge}
+
+		case whatsmeow.QRChannelEventPasskeyResponse:
+			// Only reaches us when the confirmation is not automatic: with a
+			// valid handoff proof the library confirms on its own and emits
+			// nothing, which is why the platform has no auto-confirm path of
+			// its own (research R7).
+			var code string
+			if item.PasskeyConfirmation != nil {
+				code = item.PasskeyConfirmation.Code
+			}
+			s.setPasskeyPhase(passkeyAwaitingConfirm)
+			evt = Event{Kind: KindPasskeyCode, Code: code}
+
 		case whatsmeow.QRChannelEventError:
-			evt = Event{Kind: KindPairingFailed, Failure: FailurePairError}
+			// Passkey failures arrive on this same item. Telling them apart
+			// matters to the tenant: "the code did not match" and "the QR was
+			// refused" call for different next steps.
+			failure := FailurePairError
+			if s.passkeyInFlight() {
+				failure = FailurePasskeyError
+			}
+			evt = Event{Kind: KindPairingFailed, Failure: failure}
 
 		default:
-			// Passkey events belong to a future slice; ignoring them keeps this
-			// loop draining, which is what the library requires.
+			// Unknown item types must still leave the loop draining: the
+			// library closes the channel and drops the client when the consumer
+			// falls behind (research R2).
 			continue
 		}
 
@@ -280,9 +401,178 @@ func (s *hypermeowSession) Connect(ctx context.Context) error {
 		return nil
 	}
 	if err := s.client.ConnectContext(ctx); err != nil {
+		if s.proxyConfigured {
+			// The dialer reports the same error whether the proxy or the
+			// destination is unreachable, and the platform cannot tell them
+			// apart from here. Naming it as a proxy failure is the honest
+			// reading: with a proxy configured, every byte goes through it, so
+			// it is the first thing to check — and there is deliberately no
+			// direct fallback to mask the problem (FR-005).
+			metrics.ProxyConnectFailures.Inc()
+			return fmt.Errorf("%w: %w", ErrProxyConnectFailed, err)
+		}
 		return fmt.Errorf("connect: %w", err)
 	}
 	return nil
+}
+
+// SetPassive tells the server whether this device announces itself as active.
+//
+// The library restores active mode on every connection, in the goroutine that
+// runs after authentication and before it dispatches Connected, so the caller
+// must reapply after each Connected rather than once. The ordering also removes
+// the race: our call is dispatched from an event the library only emits after
+// its own SetPassive(false) has run (research R6).
+func (s *hypermeowSession) SetPassive(ctx context.Context, passive bool) error {
+	if !s.client.IsConnected() {
+		return ErrNotConnected
+	}
+	if err := s.client.SetPassive(ctx, passive); err != nil {
+		return fmt.Errorf("set passive mode: %w", err)
+	}
+	return nil
+}
+
+func (s *hypermeowSession) SendPasskeyResponse(ctx context.Context, webauthnResponseJSON []byte) error {
+	s.mu.Lock()
+	phase := s.passkeyPhase
+	s.mu.Unlock()
+
+	if phase != passkeyAwaitingResponse {
+		return ErrNoPasskeyChallenge
+	}
+
+	var response types.WebAuthnResponse
+	if err := json.Unmarshal(webauthnResponseJSON, &response); err != nil {
+		return fmt.Errorf("%w: %w", ErrInvalidPasskeyResponse, err)
+	}
+
+	if err := s.client.SendPasskeyResponse(ctx, &response); err != nil {
+		return fmt.Errorf("send passkey response: %w", err)
+	}
+	// The challenge is spent either way; what happens next arrives as an event
+	// (a handoff code, or the pairing simply succeeding).
+	s.setPasskeyPhase(passkeyNone)
+	return nil
+}
+
+func (s *hypermeowSession) ConfirmPasskey(ctx context.Context) error {
+	s.mu.Lock()
+	phase := s.passkeyPhase
+	s.mu.Unlock()
+
+	// The library clears its linking cache on success, so a second call fails
+	// with an opaque message. Checking here turns a double submit into a clear
+	// answer and keeps the attempt intact (research R7).
+	if phase != passkeyAwaitingConfirm {
+		return ErrNoPasskeyCode
+	}
+
+	if err := s.client.SendPasskeyConfirmation(ctx); err != nil {
+		return fmt.Errorf("send passkey confirmation: %w", err)
+	}
+	s.setPasskeyPhase(passkeyNone)
+	return nil
+}
+
+func (s *hypermeowSession) IdentityVerificationCodes(ctx context.Context, contact string) (*VerificationCodes, error) {
+	if !s.client.IsConnected() {
+		return nil, ErrNotConnected
+	}
+
+	target, err := s.resolveContactLID(ctx, contact)
+	if err != nil {
+		return nil, err
+	}
+
+	codes, err := s.client.GetIdentityVerificationCodes(ctx, target)
+	if err != nil {
+		return nil, translateVerificationError(err)
+	}
+
+	return &VerificationCodes{
+		LID:            codes.UserID.String(),
+		PhoneNumber:    phoneUserOrEmpty(codes.PhoneNumber),
+		Username:       codes.Username,
+		NumericCode:    codes.NumericCode,
+		DisplayQR:      codes.DisplayQRCode,
+		VerificationQR: codes.VerificationQRCode,
+	}, nil
+}
+
+// resolveContactLID turns what the tenant sent into the LID the library
+// requires. Phone numbers are resolved through mappings this session already
+// learned; discovering an identity over the network belongs to the contacts
+// slice, and guessing one here would produce a verification code for the wrong
+// person (research R8).
+func (s *hypermeowSession) resolveContactLID(ctx context.Context, contact string) (types.JID, error) {
+	if contact == "" {
+		return types.EmptyJID, ErrInvalidContact
+	}
+
+	if strings.HasSuffix(contact, "@"+types.HiddenUserServer) {
+		jid, err := types.ParseJID(contact)
+		if err != nil {
+			return types.EmptyJID, ErrInvalidContact
+		}
+		return jid.ToNonAD(), nil
+	}
+
+	// Anything else is treated as a phone number in the same format the pairing
+	// flow accepts.
+	if !isPlainPhoneNumber(contact) {
+		return types.EmptyJID, ErrInvalidContact
+	}
+	pn := types.NewJID(contact, types.DefaultUserServer)
+
+	lidStore := s.client.Store.LIDs
+	if lidStore == nil {
+		return types.EmptyJID, ErrIdentityNotResolvable
+	}
+	lid, err := lidStore.GetLIDForPN(ctx, pn)
+	if err != nil {
+		return types.EmptyJID, fmt.Errorf("resolve lid for phone number: %w", err)
+	}
+	if lid.IsEmpty() {
+		return types.EmptyJID, ErrIdentityNotResolvable
+	}
+	return lid.ToNonAD(), nil
+}
+
+// translateVerificationError maps the library's preconditions onto errors the
+// API can turn into a specific answer, rather than a generic failure.
+func translateVerificationError(err error) error {
+	switch {
+	case errors.Is(err, whatsmeow.ErrIdentityVerificationRequiresLID):
+		return ErrInvalidContact
+	case strings.Contains(err.Error(), "local user"):
+		return ErrCannotVerifySelf
+	case strings.Contains(err.Error(), "no devices found"):
+		return ErrContactUnavailable
+	default:
+		return fmt.Errorf("get identity verification codes: %w", err)
+	}
+}
+
+// isPlainPhoneNumber accepts digits only, the same shape the phone pairing flow
+// takes: E.164 without the leading plus.
+func isPlainPhoneNumber(value string) bool {
+	if len(value) < 8 || len(value) > 20 {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func phoneUserOrEmpty(jid types.JID) string {
+	if jid.IsEmpty() {
+		return ""
+	}
+	return jid.User
 }
 
 func (s *hypermeowSession) Disconnect() { s.client.Disconnect() }
@@ -361,12 +651,28 @@ func (s *hypermeowSession) handleEvent(raw any) {
 			s.logger.Error("session replaced elsewhere: exclusive ownership violated",
 				slog.String("reason", string(classification.Reason)))
 		}
+		if classification.Reason == domain.ReasonStreamError {
+			metrics.StreamErrors.WithLabelValues(classification.StreamErrorCode).Inc()
+			s.logger.Warn("stream closed with an unknown code",
+				slog.String("stream_error_code", classification.StreamErrorCode))
+		}
+
 		s.setPermanent(classification.Permanent)
+
+		// The server asking the client to reconnect is not a disconnection to
+		// report — it is an instruction to act on. Emitting it as its own kind
+		// keeps the trail honest about which of the two happened (research R5).
+		if classification.ManualReconnect {
+			s.emit(Event{Kind: KindManualLoginReconnect})
+			return
+		}
+
 		s.emit(Event{
-			Kind:         KindDisconnected,
-			Reason:       classification.Reason,
-			Permanent:    classification.Permanent,
-			BanExpiresAt: classification.BanExpiresAt,
+			Kind:            KindDisconnected,
+			Reason:          classification.Reason,
+			Permanent:       classification.Permanent,
+			BanExpiresAt:    classification.BanExpiresAt,
+			StreamErrorCode: classification.StreamErrorCode,
 		})
 	}
 }

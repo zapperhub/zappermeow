@@ -29,6 +29,23 @@ service SessionService {
 
   // Live view held by the owner; complements the persisted state.
   rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+
+  // Reapplies the instance's persisted settings on the live session. The
+  // request only says what changed: the worker rereads the values from
+  // Postgres, so there is no window where the call and the database disagree.
+  rpc ApplySettings(ApplySettingsRequest) returns (ApplySettingsResponse);
+
+  // Forwards the authenticator's WebAuthn assertion for the pending passkey
+  // challenge of the pairing attempt in flight.
+  rpc SubmitPasskeyResponse(SubmitPasskeyResponseRequest) returns (SubmitPasskeyResponseResponse);
+
+  // Confirms the handoff code that was shown to the number's owner.
+  rpc ConfirmPasskey(ConfirmPasskeyRequest) returns (ConfirmPasskeyResponse);
+
+  // Identity verification codes (safety numbers) for a conversation with one
+  // contact. Requires a connected session: it talks to WhatsApp.
+  rpc GetIdentityVerificationCodes(GetIdentityVerificationCodesRequest)
+      returns (GetIdentityVerificationCodesResponse);
 }
 
 // Fence carries the caller's view of who owns the session. The worker compares
@@ -121,4 +138,57 @@ message GetStatusResponse {
   bool logged_in = 4;
   PairingMethod pairing_method = 5;
   google.protobuf.Timestamp connected_at = 6;
+}
+
+message ApplySettingsRequest {
+  Fence fence = 1;
+  // Relink the session using the proxy reread from the database. The proxy
+  // only takes effect on the websocket at connection time, so applying it
+  // means reconnecting.
+  bool proxy_changed = 2;
+  // Apply passive mode on the live session.
+  bool passive_changed = 3;
+}
+
+message ApplySettingsResponse {
+  SessionState state = 1;
+  bool reconnecting = 2;
+  bool passive_applied = 3;
+}
+
+message SubmitPasskeyResponseRequest {
+  Fence fence = 1;
+  // The WebAuthn assertion as JSON, opaque to the platform: only the wa
+  // boundary knows how to turn it into the library's type.
+  bytes webauthn_response_json = 2;
+}
+
+message SubmitPasskeyResponseResponse {
+  // State of the attempt after the assertion was forwarded. What comes next
+  // (a handoff code, or an automatic confirmation) arrives as an event.
+  SessionState state = 1;
+}
+
+message ConfirmPasskeyRequest {
+  Fence fence = 1;
+}
+
+message ConfirmPasskeyResponse {
+  SessionState state = 1;
+}
+
+message GetIdentityVerificationCodesRequest {
+  Fence fence = 1;
+  // "<user>@lid" or a phone number in E.164 without '+'. Phone numbers are
+  // resolved to a LID by the worker, which is where the session store lives.
+  string contact = 2;
+}
+
+message GetIdentityVerificationCodesResponse {
+  string lid = 1;
+  string phone_number = 2; // empty when unknown
+  string username = 3;     // empty when unknown
+  string numeric_code = 4; // 60 digits
+  bytes display_qr = 5;
+  bytes verification_qr = 6;
 }

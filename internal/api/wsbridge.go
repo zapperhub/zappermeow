@@ -131,11 +131,22 @@ func (s *wsSnapshotter) Snapshot(ctx context.Context, instanceID domain.ID) (eve
 		return events.Envelope{}, err
 	}
 	if found {
-		data["pairing"] = map[string]any{
+		// The phase says which of the three things the attempt is waiting on.
+		// Without it a client arriving during the passkey step would be handed a
+		// QR code that stopped working the moment that step began (research R10).
+		attempt := map[string]any{
 			"method":     pairing.Method,
-			"code":       pairing.Code,
+			"phase":      string(pairing.CurrentPhase()),
 			"expires_at": pairing.ExpiresAt.UTC(),
 		}
+		switch pairing.CurrentPhase() {
+		case events.PhasePasskeyChallenge:
+			attempt["public_key"] = pairing.Challenge
+		default:
+			// Both the QR and the handoff-code phases are a code to show.
+			attempt["code"] = pairing.Code
+		}
+		data["pairing"] = attempt
 	} else {
 		data["pairing"] = nil
 	}

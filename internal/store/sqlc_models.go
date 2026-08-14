@@ -50,6 +50,8 @@ type Instance struct {
 	LastDisconnectAt     *time.Time
 	LastDisconnectReason *string
 	BanExpiresAt         *time.Time
+	ProxyUrl             *string
+	PassiveMode          bool
 }
 
 type SecurityEvent struct {

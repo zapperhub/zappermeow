@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,16 +24,42 @@ import (
 // fakeFactory hands out sessions the test scripts. Postgres and Redis stay
 // real; only the WhatsApp hop is replaced (research R13).
 type fakeFactory struct {
+	mu       sync.Mutex
 	sessions map[domain.ID]*wa.FakeSession
+	// configs records every build, in order. The proxy reaches the client only
+	// through here, so this is where a test can prove the stored value was the
+	// one used — and that a rebuild used the new one.
+	configs []wa.SessionConfig
 }
 
-func (f *fakeFactory) NewSession(_ context.Context, instanceID domain.ID, _ string) (wa.Session, error) {
-	if session, ok := f.sessions[instanceID]; ok {
+func (f *fakeFactory) NewSession(_ context.Context, instanceID domain.ID, cfg wa.SessionConfig) (wa.Session, error) {
+	f.mu.Lock()
+	f.configs = append(f.configs, cfg)
+	f.mu.Unlock()
+
+	// A closed session is never handed out again: the real container builds a
+	// new client on every call, so reusing a dead one here would let a test
+	// pass against code that never rebuilt anything.
+	if session, ok := f.sessions[instanceID]; ok && !session.IsClosed() {
 		return session, nil
 	}
+
+	// A stored JID means the real container loads existing device material, so
+	// the replacement reconnects without pairing again. A fake that always came
+	// back unpaired would make every rebuild look like a lost pairing.
 	session := wa.NewFakeSession()
+	if cfg.StoredJID != "" {
+		session = wa.NewPairedFakeSession(domain.DeviceIdentity{JID: cfg.StoredJID})
+	}
 	f.sessions[instanceID] = session
 	return session, nil
+}
+
+// Configs returns the configuration of every session built so far, in order.
+func (f *fakeFactory) Configs() []wa.SessionConfig {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]wa.SessionConfig(nil), f.configs...)
 }
 
 type harness struct {
@@ -116,6 +143,25 @@ func (h *harness) connected(t *testing.T) *wa.FakeSession {
 	})
 	h.waitForState(t, domain.InstanceConnected)
 	return session
+}
+
+// setProxy and clearProxy write the setting straight to the database, which is
+// what the API does before commanding the owner. Going through the store keeps
+// these worker tests free of the service layer.
+func (h *harness) setProxy(t *testing.T, rawURL string) {
+	t.Helper()
+	require.NoError(t, h.infra.Queries.SetInstanceProxy(h.ctx, store.SetInstanceProxyParams{
+		ID:       h.instanceID,
+		ProxyUrl: &rawURL,
+	}))
+}
+
+func (h *harness) clearProxy(t *testing.T) {
+	t.Helper()
+	require.NoError(t, h.infra.Queries.SetInstanceProxy(h.ctx, store.SetInstanceProxyParams{
+		ID:       h.instanceID,
+		ProxyUrl: nil,
+	}))
 }
 
 func (h *harness) instance(t *testing.T) store.Instance {

@@ -145,6 +145,15 @@ func statusFor(code domain.Code) int {
 		return http.StatusServiceUnavailable
 	case domain.CodeWhatsAppUnavailable:
 		return http.StatusBadGateway
+	case domain.CodeInvalidProxyURL, domain.CodeUnsupportedProxyScheme,
+		domain.CodeIdentityNotResolvable, domain.CodeInvalidContact,
+		domain.CodeCannotVerifySelf:
+		return http.StatusUnprocessableEntity
+	case domain.CodeNoPasskeyChallenge, domain.CodeNoPasskeyCode,
+		domain.CodeInstanceNotConnected:
+		return http.StatusConflict
+	case domain.CodeContactUnavailable:
+		return http.StatusNotFound
 	default:
 		return http.StatusInternalServerError
 	}

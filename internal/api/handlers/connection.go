@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -87,8 +88,119 @@ type PairPhoneData struct {
 	State       string `json:"state"`
 }
 
+// SetProxyInput carries the egress proxy address.
+type SetProxyInput struct {
+	InstanceID string `path:"instanceId" format:"uuid"`
+	Body       struct {
+		// URL includes credentials when the proxy needs them. It is stored as
+		// given and never echoed back: responses carry the masked form.
+		URL string `json:"url" maxLength:"1024" example:"socks5://user:secret@203.0.113.10:1080"`
+	}
+}
+
+// ProxyData reports the stored proxy and whether a live session was relinked.
+type ProxyData struct {
+	// ProxyURL is always masked, and null when the instance connects directly.
+	ProxyURL *string `json:"proxy_url" example:"socks5://user:***@203.0.113.10:1080"`
+	// Reconnecting is true when a running session was told to relink; false
+	// means the setting applies from the next connection.
+	Reconnecting bool `json:"reconnecting"`
+}
+
+// PasskeyResponseInput carries the authenticator's WebAuthn assertion.
+type PasskeyResponseInput struct {
+	InstanceID string `path:"instanceId" format:"uuid"`
+	Body       struct {
+		// Response is the assertion from navigator.credentials.get(), passed
+		// through untouched: the platform never inspects it.
+		Response json.RawMessage `json:"response"`
+	}
+}
+
+// PasskeyStepData reports the pairing state after a passkey command.
+type PasskeyStepData struct {
+	InstanceID string `json:"instance_id" format:"uuid"`
+	State      string `json:"state"`
+}
+
+// SetPassiveModeInput toggles passive mode.
+type SetPassiveModeInput struct {
+	InstanceID string `path:"instanceId" format:"uuid"`
+	Body       struct {
+		Enabled bool `json:"enabled"`
+	}
+}
+
+// PassiveModeData reports the stored choice and whether it reached the session.
+type PassiveModeData struct {
+	PassiveMode bool `json:"passive_mode"`
+	// Applied is true when a connected session took the change immediately.
+	Applied bool `json:"applied"`
+}
+
 // Register mounts the connection routes.
 func (h *ConnectionHandler) Register(api huma.API) {
+	huma.Register(api, huma.Operation{
+		OperationID: "set-instance-proxy",
+		Method:      http.MethodPut,
+		Path:        "/instances/{instanceId}/proxy",
+		Summary:     "Set the egress proxy of an instance",
+		Description: "All traffic for this instance — websocket and media — goes through the proxy, on every " +
+			"connection and reconnection. There is no direct fallback: if the proxy is unreachable the instance " +
+			"stays offline and retries through it. A connected instance is relinked immediately.",
+		Tags:          []string{"connection"},
+		Security:      connectionSecurity,
+		DefaultStatus: http.StatusOK,
+	}, h.setProxy)
+
+	huma.Register(api, huma.Operation{
+		OperationID:   "clear-instance-proxy",
+		Method:        http.MethodDelete,
+		Path:          "/instances/{instanceId}/proxy",
+		Summary:       "Remove the egress proxy of an instance",
+		Description:   "Puts the instance back on direct connections, relinking a running session immediately.",
+		Tags:          []string{"connection"},
+		Security:      connectionSecurity,
+		DefaultStatus: http.StatusOK,
+	}, h.clearProxy)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "submit-instance-passkey-response",
+		Method:      http.MethodPost,
+		Path:        "/instances/{instanceId}/pairing/passkey/response",
+		Summary:     "Answer a passkey challenge",
+		Description: "Forwards the authenticator's WebAuthn assertion for the challenge published on the event " +
+			"channel. Answers 202: what comes next — a handoff code, or the pairing simply completing — arrives " +
+			"over the same channel.",
+		Tags:          []string{"connection"},
+		Security:      connectionSecurity,
+		DefaultStatus: http.StatusAccepted,
+	}, h.submitPasskeyResponse)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "confirm-instance-passkey",
+		Method:      http.MethodPost,
+		Path:        "/instances/{instanceId}/pairing/passkey/confirm",
+		Summary:     "Confirm a passkey handoff code",
+		Description: "Confirms the code published on the event channel was shown to the number's owner and " +
+			"matched their handset. Not needed when the confirmation was automatic.",
+		Tags:          []string{"connection"},
+		Security:      connectionSecurity,
+		DefaultStatus: http.StatusAccepted,
+	}, h.confirmPasskey)
+
+	huma.Register(api, huma.Operation{
+		OperationID: "set-instance-passive-mode",
+		Method:      http.MethodPut,
+		Path:        "/instances/{instanceId}/passive-mode",
+		Summary:     "Toggle passive mode",
+		Description: "In passive mode the instance keeps receiving everything but does not announce itself as an " +
+			"active device. The choice is stored and reapplied on every connection.",
+		Tags:          []string{"connection"},
+		Security:      connectionSecurity,
+		DefaultStatus: http.StatusOK,
+	}, h.setPassiveMode)
+
 	huma.Register(api, huma.Operation{
 		OperationID: "connect-instance",
 		Method:      http.MethodPost,
@@ -134,6 +246,90 @@ func (h *ConnectionHandler) Register(api huma.API) {
 		Security:      connectionSecurity,
 		DefaultStatus: http.StatusAccepted,
 	}, h.logout)
+}
+
+func (h *ConnectionHandler) setProxy(ctx context.Context, in *SetProxyInput) (*httperr.Response[ProxyData], error) {
+	principal, err := principalFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := h.connections.SetProxy(ctx, principal.InstanceID, in.Body.URL)
+	if err != nil {
+		return nil, httperr.From(err)
+	}
+
+	return httperr.OK(ProxyData{
+		ProxyURL:     &result.ProxyURL,
+		Reconnecting: result.Reconnecting,
+	}), nil
+}
+
+func (h *ConnectionHandler) clearProxy(ctx context.Context, _ *InstancePathInput) (*httperr.Response[ProxyData], error) {
+	principal, err := principalFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := h.connections.ClearProxy(ctx, principal.InstanceID)
+	if err != nil {
+		return nil, httperr.From(err)
+	}
+
+	return httperr.OK(ProxyData{Reconnecting: result.Reconnecting}), nil
+}
+
+func (h *ConnectionHandler) submitPasskeyResponse(ctx context.Context, in *PasskeyResponseInput) (*httperr.Response[PasskeyStepData], error) {
+	principal, err := principalFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(in.Body.Response) == 0 {
+		return nil, httperr.From(domain.ErrValidation("body.response", "must not be empty"))
+	}
+
+	if err := h.connections.SubmitPasskeyResponse(ctx, principal.InstanceID, in.Body.Response); err != nil {
+		return nil, httperr.From(err)
+	}
+
+	return httperr.Respond(http.StatusAccepted, PasskeyStepData{
+		InstanceID: principal.InstanceID.String(),
+		State:      string(domain.InstancePairing),
+	}), nil
+}
+
+func (h *ConnectionHandler) confirmPasskey(ctx context.Context, _ *InstancePathInput) (*httperr.Response[PasskeyStepData], error) {
+	principal, err := principalFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := h.connections.ConfirmPasskey(ctx, principal.InstanceID); err != nil {
+		return nil, httperr.From(err)
+	}
+
+	return httperr.Respond(http.StatusAccepted, PasskeyStepData{
+		InstanceID: principal.InstanceID.String(),
+		State:      string(domain.InstancePairing),
+	}), nil
+}
+
+func (h *ConnectionHandler) setPassiveMode(ctx context.Context, in *SetPassiveModeInput) (*httperr.Response[PassiveModeData], error) {
+	principal, err := principalFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := h.connections.SetPassiveMode(ctx, principal.InstanceID, in.Body.Enabled)
+	if err != nil {
+		return nil, httperr.From(err)
+	}
+
+	return httperr.OK(PassiveModeData{
+		PassiveMode: result.PassiveMode,
+		Applied:     result.PassiveApplied,
+	}), nil
 }
 
 func (h *ConnectionHandler) connect(ctx context.Context, _ *InstancePathInput) (*httperr.Response[ConnectData], error) {
@@ -264,6 +460,11 @@ type ConnectionStatusData struct {
 	// SharesNumberWith names sibling instances paired to the same number.
 	// Legitimate under multi-device, so it is context rather than a warning.
 	SharesNumberWith []string `json:"shares_number_with"`
+	// ProxyURL is the egress proxy with its password masked, null for a direct
+	// connection. The stored credentials are never returned (FR-007).
+	ProxyURL *string `json:"proxy_url" example:"socks5://user:***@203.0.113.10:1080"`
+	// PassiveMode is the stored choice; it is reapplied on every connection.
+	PassiveMode bool `json:"passive_mode"`
 }
 
 // ConnectionEventData is one entry of the trail.
@@ -332,6 +533,10 @@ func (h *ConnectionHandler) status(ctx context.Context, _ *InstancePathInput) (*
 		ConnectedAt:      formatTime(status.ConnectedAt),
 		BanExpiresAt:     formatTime(status.BanExpiresAt),
 		SharesNumberWith: []string{},
+		PassiveMode:      status.PassiveMode,
+	}
+	if status.ProxyURL != "" {
+		data.ProxyURL = &status.ProxyURL
 	}
 	for _, id := range status.SharesNumberWith {
 		data.SharesNumberWith = append(data.SharesNumberWith, id.String())

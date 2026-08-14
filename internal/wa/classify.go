@@ -18,6 +18,12 @@ type Classification struct {
 	Permanent bool
 	// BanExpiresAt is set only for temporary bans that carry a deadline.
 	BanExpiresAt *time.Time
+	// StreamErrorCode is the unknown code that closed the stream, set only for
+	// ReasonStreamError.
+	StreamErrorCode string
+	// ManualReconnect means the server asked the client to reconnect itself:
+	// the caller must schedule a reconnect rather than wait for the library.
+	ManualReconnect bool
 }
 
 // ClassifyDisconnect maps a HyperMeow event onto the platform's connection
@@ -49,6 +55,34 @@ func ClassifyDisconnect(evt any) (Classification, bool) {
 		return Classification{
 			State:  domain.InstanceConnecting,
 			Reason: domain.ReasonKeepaliveTimeout,
+		}, true
+
+	case *events.StreamError:
+		// Only codes the library does not recognise reach here: every code it
+		// knows (515, 401 conflict, replaced, 503, CAT refresh) is handled
+		// internally and surfaces as one of the events above.
+		//
+		// Not permanent, and that follows the library rather than being our
+		// call: this branch neither expects the disconnect nor stops the
+		// automatic reconnection, and StreamError does not implement
+		// PermanentDisconnect. The session material is untouched — a stream
+		// error is not a logout (research R9).
+		return Classification{
+			State:           domain.InstanceConnecting,
+			Reason:          domain.ReasonStreamError,
+			StreamErrorCode: e.Code,
+		}, true
+
+	case *events.ManualLoginReconnect:
+		// The server asked the client to reconnect on its own after pairing.
+		// The library only raises this when its post-pairing auto-reconnect is
+		// disabled, which this platform does not do — handling it anyway costs
+		// one case and keeps a future flag change from stranding an attempt on
+		// its last step (research R5).
+		return Classification{
+			State:           domain.InstanceConnecting,
+			Reason:          domain.ReasonNetwork,
+			ManualReconnect: true,
 		}, true
 
 	// --- invalidation: stop trying ---

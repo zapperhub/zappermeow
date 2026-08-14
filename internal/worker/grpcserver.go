@@ -29,6 +29,15 @@ const (
 	DetailDraining        = "DRAINING"
 	DetailUpstreamFailure = "UPSTREAM_FAILURE"
 	DetailUnknownInstance = "UNKNOWN_INSTANCE"
+
+	// Connection extras (feature 003).
+	DetailNoPasskeyChallenge    = "NO_PASSKEY_CHALLENGE"
+	DetailNoPasskeyCode         = "NO_PASSKEY_CODE"
+	DetailNotConnected          = "INSTANCE_NOT_CONNECTED"
+	DetailInvalidContact        = "INVALID_CONTACT"
+	DetailIdentityNotResolvable = "IDENTITY_NOT_RESOLVABLE"
+	DetailCannotVerifySelf      = "CANNOT_VERIFY_SELF"
+	DetailContactUnavailable    = "CONTACT_UNAVAILABLE"
 )
 
 // GRPCServer exposes SessionService over the private network.
@@ -179,6 +188,74 @@ func (s *GRPCServer) GetStatus(ctx context.Context, req *sessionv1.GetStatusRequ
 	return resp, nil
 }
 
+func (s *GRPCServer) ApplySettings(ctx context.Context, req *sessionv1.ApplySettingsRequest) (*sessionv1.ApplySettingsResponse, error) {
+	instanceID, err := s.fence(ctx, req.GetFence())
+	if err != nil {
+		return nil, err
+	}
+
+	result, err := s.supervisor.ApplySettings(ctx, instanceID, req.GetProxyChanged(), req.GetPassiveChanged())
+	if err != nil {
+		return nil, translate(err)
+	}
+
+	return &sessionv1.ApplySettingsResponse{
+		State:          stateToProto(result.State),
+		Reconnecting:   result.Reconnecting,
+		PassiveApplied: result.PassiveApplied,
+	}, nil
+}
+
+func (s *GRPCServer) SubmitPasskeyResponse(ctx context.Context, req *sessionv1.SubmitPasskeyResponseRequest) (*sessionv1.SubmitPasskeyResponseResponse, error) {
+	instanceID, err := s.fence(ctx, req.GetFence())
+	if err != nil {
+		return nil, err
+	}
+
+	state, err := s.supervisor.SubmitPasskeyResponse(ctx, instanceID, req.GetWebauthnResponseJson())
+	if err != nil {
+		return nil, translate(err)
+	}
+	return &sessionv1.SubmitPasskeyResponseResponse{State: stateToProto(state)}, nil
+}
+
+func (s *GRPCServer) ConfirmPasskey(ctx context.Context, req *sessionv1.ConfirmPasskeyRequest) (*sessionv1.ConfirmPasskeyResponse, error) {
+	instanceID, err := s.fence(ctx, req.GetFence())
+	if err != nil {
+		return nil, err
+	}
+
+	state, err := s.supervisor.ConfirmPasskey(ctx, instanceID)
+	if err != nil {
+		return nil, translate(err)
+	}
+	return &sessionv1.ConfirmPasskeyResponse{State: stateToProto(state)}, nil
+}
+
+func (s *GRPCServer) GetIdentityVerificationCodes(
+	ctx context.Context,
+	req *sessionv1.GetIdentityVerificationCodesRequest,
+) (*sessionv1.GetIdentityVerificationCodesResponse, error) {
+	instanceID, err := s.fence(ctx, req.GetFence())
+	if err != nil {
+		return nil, err
+	}
+
+	codes, err := s.supervisor.IdentityVerificationCodes(ctx, instanceID, req.GetContact())
+	if err != nil {
+		return nil, translate(err)
+	}
+
+	return &sessionv1.GetIdentityVerificationCodesResponse{
+		Lid:            codes.LID,
+		PhoneNumber:    codes.PhoneNumber,
+		Username:       codes.Username,
+		NumericCode:    codes.NumericCode,
+		DisplayQr:      codes.DisplayQR,
+		VerificationQr: codes.VerificationQR,
+	}, nil
+}
+
 // translate maps supervisor errors onto the gRPC codes the API knows how to
 // turn into problem details.
 func translate(err error) error {
@@ -195,6 +272,20 @@ func translate(err error) error {
 		return status.Error(codes.Aborted, DetailPairingRunning)
 	case errors.Is(err, ErrDraining):
 		return status.Error(codes.Unavailable, DetailDraining)
+	case errors.Is(err, wa.ErrNoPasskeyChallenge):
+		return status.Error(codes.FailedPrecondition, DetailNoPasskeyChallenge)
+	case errors.Is(err, wa.ErrNoPasskeyCode):
+		return status.Error(codes.FailedPrecondition, DetailNoPasskeyCode)
+	case errors.Is(err, wa.ErrNotConnected):
+		return status.Error(codes.FailedPrecondition, DetailNotConnected)
+	case errors.Is(err, wa.ErrInvalidContact), errors.Is(err, wa.ErrInvalidPasskeyResponse):
+		return status.Error(codes.InvalidArgument, DetailInvalidContact)
+	case errors.Is(err, wa.ErrIdentityNotResolvable):
+		return status.Error(codes.NotFound, DetailIdentityNotResolvable)
+	case errors.Is(err, wa.ErrCannotVerifySelf):
+		return status.Error(codes.InvalidArgument, DetailCannotVerifySelf)
+	case errors.Is(err, wa.ErrContactUnavailable):
+		return status.Error(codes.NotFound, DetailContactUnavailable)
 	default:
 		// Anything reaching here is a failure talking to WhatsApp or to our own
 		// storage. Unavailable tells the API to surface it as an upstream
