@@ -31,7 +31,7 @@ type Server struct {
 
 // NewServer builds the router, installs the shared middlewares and registers
 // the unauthenticated infrastructure routes.
-func NewServer(logger *slog.Logger, trustProxyHeaders bool) *Server {
+func NewServer(logger *slog.Logger, trustProxyHeaders bool, allowedOrigins []string) *Server {
 	// Make every error huma raises on its own carry our code/timestamp
 	// extensions, and describe this model in the generated OpenAPI document.
 	httperr.Install()
@@ -41,6 +41,8 @@ func NewServer(logger *slog.Logger, trustProxyHeaders bool) *Server {
 	router.Use(chimw.Recoverer)
 	router.Use(middleware.RequestLogger(logger))
 	router.Use(middleware.ClientIPResolver(trustProxyHeaders))
+	// No-op when no origin is allowed, which is the default.
+	router.Use(middleware.CORS(allowedOrigins))
 
 	router.Handle("/metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{
 		Registry: metrics.Registry,

@@ -85,6 +85,12 @@ type Handler struct {
 	// credential. Exposed so tests can prove the recheck happens instead of
 	// asserting that the code merely exists.
 	RevalidateInterval time.Duration
+
+	// AllowedOrigins are the browser origins accepted at the upgrade. Empty
+	// means same-origin only: the library refuses a page served from anywhere
+	// else, which is the right default for a server-to-server deployment and
+	// the wrong one for the browser support this contract promises.
+	AllowedOrigins []string
 }
 
 // NewHandler builds the handler.
@@ -146,7 +152,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, instanceID d
 	}
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		Subprotocols: []string{Subprotocol},
+		Subprotocols:   []string{Subprotocol},
+		OriginPatterns: h.AllowedOrigins,
 	})
 	if err != nil {
 		logger.Warn("websocket upgrade failed", slog.String("error", err.Error()))

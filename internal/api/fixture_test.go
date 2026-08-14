@@ -131,6 +131,9 @@ type response struct {
 	t      *testing.T
 	Status int
 	Body   []byte
+	// Header carries the response headers, which negotiation-level behaviour
+	// like CORS lives in rather than in the body.
+	Header http.Header
 }
 
 func (f *fixture) do(req request) *response {
@@ -158,7 +161,7 @@ func (f *fixture) do(req request) *response {
 	recorder := httptest.NewRecorder()
 	f.handler.ServeHTTP(recorder, httpReq)
 
-	return &response{t: f.t, Status: recorder.Code, Body: recorder.Body.Bytes()}
+	return &response{t: f.t, Status: recorder.Code, Body: recorder.Body.Bytes(), Header: recorder.Header()}
 }
 
 // envelope is the standard success shape.

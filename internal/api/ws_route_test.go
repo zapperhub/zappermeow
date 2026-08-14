@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zapperhub/zappermeow/internal/api/ws"
+	"github.com/zapperhub/zappermeow/internal/config"
 	"github.com/zapperhub/zappermeow/internal/domain"
 	"github.com/zapperhub/zappermeow/internal/events"
 )
@@ -226,4 +227,88 @@ func TestWebSocketFansOutToEveryListener(t *testing.T) {
 		assert.Equal(t, "2@broadcast", frame.Data["code"])
 		assert.Equal(t, int64(4), frame.Generation)
 	}
+}
+
+// A browser sends an Origin header; a Go client does not. That difference is
+// why this suite passed while the page failed with 403 — the upgrade library
+// refuses a cross-origin request unless the deployment names the origin.
+func TestWebSocketRefusesAnUnlistedOrigin(t *testing.T) {
+	f := newFixture(t)
+	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
+	server := f.wsServer(t)
+
+	status := dialWSRefused(t, server, setup.instanceID, &coderws.DialOptions{
+		HTTPHeader: http.Header{
+			"X-Api-Key": {setup.key},
+			"Origin":    {"http://localhost:8090"},
+		},
+	})
+	assert.Equal(t, http.StatusForbidden, status,
+		"an origin nobody allowed must not open a channel")
+}
+
+func TestWebSocketAcceptsAnAllowedOrigin(t *testing.T) {
+	f := newFixture(t, func(cfg *config.Config) {
+		cfg.AllowedOrigins = []string{"localhost:8090"}
+	})
+	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
+	server := f.wsServer(t)
+
+	conn, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{
+		HTTPHeader: http.Header{
+			"X-Api-Key": {setup.key},
+			"Origin":    {"http://localhost:8090"},
+		},
+	})
+	require.NoError(t, err)
+	defer func() { _ = conn.Close(coderws.StatusNormalClosure, "") }()
+
+	assert.Equal(t, events.TypeStateSnapshot, readEnvelope(t, conn).Type)
+}
+
+// CORS and the WebSocket origin check are the same decision: a browser that can
+// open the channel but cannot call the routes is a promise half kept.
+func TestCORSPreflightFollowsTheSameAllowlist(t *testing.T) {
+	f := newFixture(t, func(cfg *config.Config) {
+		cfg.AllowedOrigins = []string{"localhost:8090"}
+	})
+	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
+
+	resp := f.do(request{
+		method: http.MethodOptions,
+		path:   "/instances/" + setup.instanceID + "/connect",
+		header: map[string]string{
+			"Origin":                         "http://localhost:8090",
+			"Access-Control-Request-Method":  "POST",
+			"Access-Control-Request-Headers": "x-api-key",
+		},
+	})
+	assert.Equal(t, http.StatusNoContent, resp.Status)
+
+	blocked := f.do(request{
+		method: http.MethodOptions,
+		path:   "/instances/" + setup.instanceID + "/connect",
+		header: map[string]string{
+			"Origin":                        "http://evil.example",
+			"Access-Control-Request-Method": "POST",
+		},
+	})
+	assert.Equal(t, http.StatusForbidden, blocked.Status,
+		"an origin outside the list gets nothing to work with")
+}
+
+// The default stays closed: a deployment that never mentions an origin behaves
+// exactly as before.
+func TestNoCORSHeadersWithoutAnAllowlist(t *testing.T) {
+	f := newFixture(t)
+	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
+
+	resp := f.do(request{
+		method: http.MethodPost,
+		path:   "/instances/" + setup.instanceID + "/disconnect",
+		apiKey: setup.key,
+		header: map[string]string{"Origin": "http://localhost:8090"},
+	})
+	assert.Equal(t, http.StatusAccepted, resp.Status)
+	assert.Empty(t, resp.Header.Get("Access-Control-Allow-Origin"))
 }

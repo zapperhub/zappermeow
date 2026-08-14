@@ -128,6 +128,7 @@ func (s *Server) RegisterRoutes(deps RouteDeps) {
 			&wsSnapshotter{queries: deps.Queries, publisher: deps.Publisher},
 			deps.Logger,
 		)
+		wsHandler.AllowedOrigins = cfg.AllowedOrigins
 		s.router.Get("/instances/{instanceId}/ws", func(w http.ResponseWriter, r *http.Request) {
 			instanceID, err := domain.ParseID("path.instanceId", chi.URLParam(r, "instanceId"))
 			if err != nil {

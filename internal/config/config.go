@@ -50,6 +50,13 @@ type Config struct {
 	// spoof their origin and bypass the per-origin login limit.
 	TrustProxyHeaders bool `env:"TRUST_PROXY_HEADERS" envDefault:"false"`
 
+	// AllowedOrigins lists the browser origins allowed to reach the API — a
+	// tenant dashboard, the pairing tool. Empty keeps the safe default: only a
+	// page served by the API itself, which is what a server-to-server
+	// deployment needs. It governs both the WebSocket origin check and the CORS
+	// headers on REST, because they are the same decision seen twice.
+	AllowedOrigins []string `env:"ALLOWED_ORIGINS" envSeparator:","`
+
 	OTelEnabled bool `env:"OTEL_ENABLED" envDefault:"false"`
 
 	SecretsDir string `env:"SECRETS_DIR" envDefault:"/run/secrets"`

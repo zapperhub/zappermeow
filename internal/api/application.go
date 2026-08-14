@@ -10,10 +10,10 @@ import (
 
 	"github.com/zapperhub/zappermeow/internal/api/sessionclient"
 	"github.com/zapperhub/zappermeow/internal/config"
-	"github.com/zapperhub/zappermeow/internal/events"
-	"github.com/zapperhub/zappermeow/internal/lease"
 	"github.com/zapperhub/zappermeow/internal/domain"
 	"github.com/zapperhub/zappermeow/internal/domain/services"
+	"github.com/zapperhub/zappermeow/internal/events"
+	"github.com/zapperhub/zappermeow/internal/lease"
 	"github.com/zapperhub/zappermeow/internal/store"
 )
 
@@ -60,7 +60,7 @@ func NewApplication(ctx context.Context, opts Options) (*Application, error) {
 	})
 	sessions := sessionclient.New(leases, opts.Redis, logger)
 
-	server := NewServer(logger, cfg.TrustProxyHeaders)
+	server := NewServer(logger, cfg.TrustProxyHeaders, cfg.AllowedOrigins)
 	server.RegisterRoutes(RouteDeps{
 		Config:    cfg,
 		Logger:    logger,
