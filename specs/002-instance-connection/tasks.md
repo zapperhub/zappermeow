@@ -103,8 +103,8 @@ Layout fixado na constituição: `cmd/zappermeow/` + `internal/{api, worker, lea
 - [X] T037 [US2] Implementar `POST /instances/{instanceId}/logout` em `internal/api/handlers/connection.go`: devolve `logout_mode` (`remote` | `local_only`), limpa a identidade do dispositivo da instância, volta a `registrada` e registra `logged_out` na trilha
 - [X] T038 [US2] Alterar `DELETE /instances/{instanceId}` em `internal/api/handlers/instances.go`: desconecta e desloga antes de remover, cancela pareamento em curso, encerra clientes WS com código `4404` e prossegue com a exclusão mesmo se o logout remoto falhar (FR-007)
 - [X] T039 [US2] Garantir a reconexão sem novo pareamento em `internal/worker/session.go`: com `wa_jid` salvo, o boot da sessão usa `container.GetDevice` e nunca abre canal de QR
-- [ ] T040 [P] [US2] Testes de integração em `internal/worker/lifecycle_test.go`: desconectar/reconectar preserva o device; logout apaga o material e o próximo connect volta a parear; logout offline devolve `local_only`
-- [ ] T041 [P] [US2] Teste de integração da exclusão limpa em `internal/api/instances_test.go`: instância conectada excluída não deixa lease, eventos órfãos nem sessão ativa
+- [X] T040 [P] [US2] Testes de integração em `internal/worker/supervisor_test.go`: desconectar/reconectar preserva o device; logout apaga o material e o próximo connect volta a parear; logout offline devolve `local_only`
+- [X] T041 [P] [US2] Teste de integração da exclusão limpa em `internal/api/connection_test.go` e `internal/worker/supervisor_test.go`: instância conectada excluída não deixa lease, eventos órfãos nem sessão ativa
 
 ---
 
@@ -130,15 +130,15 @@ Layout fixado na constituição: `cmd/zappermeow/` + `internal/{api, worker, lea
 
 **Independent Test**: matar abruptamente o processo dono e verificar que a instância volta a `conectada` sozinha em ≤60s, com `generation` incrementada.
 
-- [ ] T049 [US4] Implementar o loop de reconciliação em `internal/worker/reconcile.go`: tick de 15s, adoção de leases `running` órfãos respeitando `MAX_SESSIONS_PER_WORKER`, ignorando instâncias cujo `last_disconnect_reason` é permanente
-- [ ] T050 [US4] Implementar o heartbeat em lote no worker (um único `UPDATE` para todos os leases possuídos, a cada 10s) e a perda de posse: ao falhar o heartbeat, encerrar as sessões correspondentes antes que outro worker as adote
-- [ ] T051 [US4] Implementar o drain no SIGTERM em `internal/worker/supervisor.go`: marcar `draining`, soltar os leases (`worker_id`/`grpc_addr`/`heartbeat_at` nulos, preservando `generation` e `desired_state`), desconectar limpo e só então encerrar
-- [ ] T052 [US4] Implementar a restauração de intenção no boot: instâncias com `desired_state = running` são adotadas e reconectadas; com `stopped` permanecem offline (FR-027)
-- [ ] T053 [US4] Implementar a cascata de suspensão de tenant em `internal/domain/services/`: `suspend` grava `desired_state = stopped` nos leases do tenant e publica `sessions:stop`; `activate` recalcula a partir de `connection_intent`, restaurando o que o usuário queria (R12, FR-041)
-- [ ] T054 [US4] Implementar a assinatura de `sessions:stop` em `internal/worker/reconcile.go`: ao receber um `instance_id`, o worker dono encerra a sessão imediatamente e registra `disconnected` com `reason: tenant_suspended` — com teste de integração provando que a suspensão derruba a sessão em segundos, sem depender do tick de reconciliação (FR-041). Sem esta assinatura, T053 publica em um canal sem ouvinte e a sessão permanece conectada
-- [ ] T055 [P] [US4] Teste de integração de failover em `internal/worker/failover_test.go`: dois workers no mesmo processo, morte abrupta do dono, adoção pelo outro em ≤60s com `generation` incrementada e sem novo pareamento
-- [ ] T056 [P] [US4] Teste de integração de fencing em `internal/worker/fencing_test.go`: comando com geração antiga é rejeitado com `WRONG_GENERATION` e não toca a sessão; o `sessionclient` da api relê o lease e acerta o novo dono na segunda tentativa
-- [ ] T057 [P] [US4] Teste de integração do drain em `internal/worker/drain_test.go`: SIGTERM libera os leases e o outro worker adota mais rápido que a expiração de 30s
+- [X] T049 [US4] Implementar o loop de reconciliação em `internal/worker/reconcile.go`: tick de 15s, adoção de leases `running` órfãos respeitando `MAX_SESSIONS_PER_WORKER`, ignorando instâncias cujo `last_disconnect_reason` é permanente
+- [X] T050 [US4] Implementar o heartbeat em lote no worker (um único `UPDATE` para todos os leases possuídos, a cada 10s) e a perda de posse: ao falhar o heartbeat, encerrar as sessões correspondentes antes que outro worker as adote
+- [X] T051 [US4] Implementar o drain no SIGTERM em `internal/worker/supervisor.go`: marcar `draining`, soltar os leases (`worker_id`/`grpc_addr`/`heartbeat_at` nulos, preservando `generation` e `desired_state`), desconectar limpo e só então encerrar
+- [X] T052 [US4] Implementar a restauração de intenção no boot: instâncias com `desired_state = running` são adotadas e reconectadas; com `stopped` permanecem offline (FR-027)
+- [X] T053 [US4] Implementar a cascata de suspensão de tenant em `internal/domain/services/`: `suspend` grava `desired_state = stopped` nos leases do tenant e publica `sessions:stop`; `activate` recalcula a partir de `connection_intent`, restaurando o que o usuário queria (R12, FR-041)
+- [X] T054 [US4] Implementar a assinatura de `sessions:stop` em `internal/worker/reconcile.go`: ao receber um `instance_id`, o worker dono encerra a sessão imediatamente e registra `disconnected` com `reason: tenant_suspended` — com teste de integração provando que a suspensão derruba a sessão em segundos, sem depender do tick de reconciliação (FR-041). Sem esta assinatura, T053 publica em um canal sem ouvinte e a sessão permanece conectada
+- [X] T055 [P] [US4] Teste de integração de failover em `internal/worker/failover_test.go`: dois workers no mesmo processo, morte abrupta do dono, adoção pelo outro em ≤60s com `generation` incrementada e sem novo pareamento
+- [X] T056 [P] [US4] Teste de integração de fencing em `internal/worker/failover_test.go`: comando com geração antiga é rejeitado com `WRONG_GENERATION` e não toca a sessão; o `sessionclient` da api relê o lease e acerta o novo dono na segunda tentativa
+- [X] T057 [P] [US4] Teste de integração do drain em `internal/worker/failover_test.go`: SIGTERM libera os leases e o outro worker adota mais rápido que a expiração de 30s
 
 ---
 
@@ -148,12 +148,12 @@ Layout fixado na constituição: `cmd/zappermeow/` + `internal/{api, worker, lea
 
 **Independent Test**: provocar logout pelo aparelho e verificar estado `deslogada`, motivo na trilha, evento no WS e **zero** tentativas de reconexão.
 
-- [ ] T058 [US5] Ligar `wa.ClassifyDisconnect` ao ciclo da sessão em `internal/worker/session.go`: invalidação interrompe a reconexão, aplica o estado terminal (`deslogada`, `banida` ou `desconectada` com motivo permanente) e persiste `last_disconnect_at`/`last_disconnect_reason`
-- [ ] T059 [US5] Persistir o prazo de banimento (`ban_expires_at`) a partir de `events.TemporaryBan` (`Code` e `Expire`) e expor no estado e na trilha (FR-030)
-- [ ] T060 [US5] Emitir `connection.logged_out` e `connection.banned` no WebSocket com os payloads do contrato, garantindo que a invalidação de uma instância **não** afete outras instâncias do mesmo número
-- [ ] T061 [US5] Implementar a reabilitação por comando explícito: `connect` limpa `last_disconnect_reason`, tornando a instância novamente elegível à reconciliação (FR-031)
-- [ ] T062 [US5] Tratar `StreamReplaced` como **alarme**: log em nível `error` e incremento de `zappermeow_stream_replaced_total`, além do estado terminal — é sinal de violação da posse exclusiva (R3)
-- [ ] T063 [P] [US5] Testes de integração em `internal/worker/invalidation_test.go` com `FakeSession`: cada evento de invalidação leva ao estado e motivo corretos e **nenhuma** reconexão é tentada; queda de rede continua reconectando
+- [X] T058 [US5] Ligar `wa.ClassifyDisconnect` ao ciclo da sessão em `internal/worker/session.go`: invalidação interrompe a reconexão, aplica o estado terminal (`deslogada`, `banida` ou `desconectada` com motivo permanente) e persiste `last_disconnect_at`/`last_disconnect_reason`
+- [X] T059 [US5] Persistir o prazo de banimento (`ban_expires_at`) a partir de `events.TemporaryBan` (`Code` e `Expire`) e expor no estado e na trilha (FR-030)
+- [X] T060 [US5] Emitir `connection.logged_out` e `connection.banned` no WebSocket com os payloads do contrato, garantindo que a invalidação de uma instância **não** afete outras instâncias do mesmo número
+- [X] T061 [US5] Implementar a reabilitação por comando explícito: `connect` limpa `last_disconnect_reason`, tornando a instância novamente elegível à reconciliação (FR-031)
+- [X] T062 [US5] Tratar `StreamReplaced` como **alarme**: log em nível `error` e incremento de `zappermeow_stream_replaced_total`, além do estado terminal — é sinal de violação da posse exclusiva (R3)
+- [X] T063 [P] [US5] Testes de integração em `internal/worker/invalidation_test.go` com `FakeSession`: cada evento de invalidação leva ao estado e motivo corretos e **nenhuma** reconexão é tentada; queda de rede continua reconectando
 
 ---
 
@@ -163,10 +163,10 @@ Layout fixado na constituição: `cmd/zappermeow/` + `internal/{api, worker, lea
 
 **Independent Test**: solicitar pareamento por código com um número de teste, digitar o código no aparelho e ver a instância conectada.
 
-- [ ] T064 [US6] Implementar `PairPhone` no worker (`internal/worker/session.go`): `Client.PairPhone(ctx, phone, showPushNotification, clientType, clientDisplayName)`, publicação do código como `pairing.code` com `method: phone` e mesma janela de expiração do fluxo de QR
-- [ ] T065 [US6] Implementar `POST /instances/{instanceId}/pair-phone` em `internal/api/handlers/connection.go`: valida E.164 sem `+` (`422 INVALID_PHONE_NUMBER` **sem** alterar estado), honra `replace_active` (`409 PAIRING_IN_PROGRESS` quando `false` e há tentativa ativa) e responde com `pairing_code` + `expires_at`
-- [ ] T066 [US6] Implementar a substituição de tentativa em curso em `internal/worker/session.go`: encerrar a anterior com `pairing.expired` e `reason: replaced_by_new_attempt` antes de iniciar a nova (FR-014)
-- [ ] T067 [P] [US6] Testes de integração em `internal/api/pairphone_test.go`: número inválido não altera estado; troca de modalidade encerra a tentativa anterior; pareamento por código persiste a identidade como no fluxo de QR
+- [X] T064 [US6] Implementar `PairPhone` no worker (`internal/worker/session.go`): `Client.PairPhone(ctx, phone, showPushNotification, clientType, clientDisplayName)`, publicação do código como `pairing.code` com `method: phone` e mesma janela de expiração do fluxo de QR
+- [X] T065 [US6] Implementar `POST /instances/{instanceId}/pair-phone` em `internal/api/handlers/connection.go`: valida E.164 sem `+` (`422 INVALID_PHONE_NUMBER` **sem** alterar estado), honra `replace_active` (`409 PAIRING_IN_PROGRESS` quando `false` e há tentativa ativa) e responde com `pairing_code` + `expires_at`
+- [X] T066 [US6] Implementar a substituição de tentativa em curso em `internal/worker/session.go`: encerrar a anterior com `pairing.expired` e `reason: replaced_by_new_attempt` antes de iniciar a nova (FR-014)
+- [X] T067 [P] [US6] Testes de integração em `internal/worker/supervisor_test.go` e `internal/api/connection_test.go`: número inválido não altera estado; troca de modalidade encerra a tentativa anterior; pareamento por código persiste a identidade como no fluxo de QR
 
 ---
 
@@ -176,24 +176,24 @@ Layout fixado na constituição: `cmd/zappermeow/` + `internal/{api, worker, lea
 
 **Independent Test**: executar o ciclo completo (connect, ouvir eventos, consultar estado, desconectar) usando só a API key, e confirmar que a key de outra instância é recusada.
 
-- [ ] T068 [US7] Habilitar a API key da instância em **todas** as rotas de conexão e declarar os dois esquemas de segurança como alternativas nos handlers huma, para que a OpenAPI gerada reflita a paridade (FR-039)
-- [ ] T069 [US7] Implementar a autenticação por subprotocolo no WebSocket (`Sec-WebSocket-Protocol: zappermeow.v1, bearer.<token>`) para navegadores, mantendo a recusa de token em query string (R7)
-- [ ] T070 [US7] Implementar a revogação em vigor no WebSocket: revalidação periódica da credencial e fechamento com `4403` quando a key for revogada ou o tenant suspenso (FR-042)
-- [ ] T071 [US7] Garantir a recusa de ações de conexão para tenant suspenso em todas as rotas da feature (FR-041), com o `404`/`403` do contrato
-- [ ] T072 [P] [US7] Testes de integração em `internal/api/connection_apikey_test.go`: paridade de comportamento entre JWT e API key; key da instância A contra a instância B responde `404`; key revogada é recusada imediatamente
-- [ ] T073 [P] [US7] Teste de integração em `internal/api/ws_auth_test.go`: handshake sem credencial não entrega frame algum; revogação durante a sessão fecha com `4403`; token em query string é recusado
+- [X] T068 [US7] Habilitar a API key da instância em **todas** as rotas de conexão e declarar os dois esquemas de segurança como alternativas nos handlers huma, para que a OpenAPI gerada reflita a paridade (FR-039)
+- [X] T069 [US7] Implementar a autenticação por subprotocolo no WebSocket (`Sec-WebSocket-Protocol: zappermeow.v1, bearer.<token>`) para navegadores, mantendo a recusa de token em query string (R7)
+- [X] T070 [US7] Implementar a revogação em vigor no WebSocket: revalidação periódica da credencial e fechamento com `4403` quando a key for revogada ou o tenant suspenso (FR-042)
+- [X] T071 [US7] Garantir a recusa de ações de conexão para tenant suspenso em todas as rotas da feature (FR-041), com o `404`/`403` do contrato
+- [X] T072 [P] [US7] Testes de integração em `internal/api/connection_test.go`: paridade de comportamento entre JWT e API key; key da instância A contra a instância B responde `404`; key revogada é recusada imediatamente
+- [X] T073 [P] [US7] Teste de integração em `internal/api/ws_route_test.go`: handshake sem credencial não entrega frame algum; revogação durante a sessão fecha com `4403`; token em query string é recusado
 
 ---
 
 ## Phase 10: Polish & Cross-Cutting Concerns
 
-- [ ] T074 [P] Implementar as métricas de `internal/metrics/metrics.go` conforme R16 — `zappermeow_sessions_connected`, `zappermeow_session_state_transitions_total`, `zappermeow_pairing_attempts_total`, `zappermeow_session_reconnects_total`, `zappermeow_lease_acquisitions_total`/`_lost_total`, `zappermeow_stream_replaced_total`, `zappermeow_ws_clients`, `zappermeow_session_command_duration_seconds` — **sem** label por instância
-- [ ] T075 [P] Garantir logs `slog` estruturados em toda transição de conexão com `tenant_id`/`instance_id`, e um teste que falhe se QR, token, API key ou material de sessão aparecerem em log, resposta ou trilha (FR-043), no espírito do `secrets_audit_test.go` da 001
-- [ ] T076 Criar `deploy/stack.yml` (Swarm) e `deploy/docker-compose.yml` (Compose) com paridade funcional incluindo o novo serviço `session-worker` (`stop_grace_period ≥ 60s`, rede privada para gRPC/Postgres/Redis, sticky sessions no Traefik só para WebSocket) — a constituição exige refletir a topologia nos dois alvos
-- [ ] T077 [P] Atualizar `ARCHITECTURE.md` e `TECH_STACK.md` com o que a implementação fixou (canal `sessions:claim`, autenticação do WS por subprotocolo, varredura de retenção no worker) — divergências entre docs e código resolvem-se corrigindo um dos lados
-- [ ] T078 [P] Validar os alvos de performance do quickstart contra a implementação: primeiro QR ≤5s (SC-001), disponibilidade contínua de código válido durante toda a tentativa, sem intervalo morto (SC-002), escaneamento→conectada ≤15s (SC-003), transição no WS ≤2s (SC-008), `GET /connection` <300ms p95 (SC-010)
-- [ ] T079 Executar o roteiro **manual** de [quickstart.md](./quickstart.md) com um número real: pareamento por QR e por código, logout visto no aparelho, e duas instâncias do mesmo número conectadas por 30 min sem se derrubarem (SC-014)
-- [ ] T080 [P] Rodar `golangci-lint` e a suíte completa (`go test ./...`) garantindo pipeline verde — pré-condição de merge (Princípio V)
+- [X] T074 [P] Implementar as métricas de `internal/metrics/metrics.go` conforme R16 — `zappermeow_sessions_connected`, `zappermeow_session_state_transitions_total`, `zappermeow_pairing_attempts_total`, `zappermeow_session_reconnects_total`, `zappermeow_lease_acquisitions_total`/`_lost_total`, `zappermeow_stream_replaced_total`, `zappermeow_ws_clients`, `zappermeow_session_command_duration_seconds` — **sem** label por instância
+- [X] T075 [P] Garantir logs `slog` estruturados em toda transição de conexão com `tenant_id`/`instance_id`, e um teste que falhe se QR, token, API key ou material de sessão aparecerem em log, resposta ou trilha (FR-043), no espírito do `secrets_audit_test.go` da 001
+- [X] T076 Criar `deploy/stack.yml` (Swarm) e `deploy/docker-compose.yml` (Compose) com paridade funcional incluindo o novo serviço `session-worker` (`stop_grace_period ≥ 60s`, rede privada para gRPC/Postgres/Redis, sticky sessions no Traefik só para WebSocket) — a constituição exige refletir a topologia nos dois alvos
+- [X] T077 [P] Atualizar `ARCHITECTURE.md` e `TECH_STACK.md` com o que a implementação fixou (canal `sessions:claim`, autenticação do WS por subprotocolo, varredura de retenção no worker) — divergências entre docs e código resolvem-se corrigindo um dos lados
+- [X] T078 [P] Validar os alvos de performance do quickstart contra a implementação: primeiro QR ≤5s (SC-001), disponibilidade contínua de código válido durante toda a tentativa, sem intervalo morto (SC-002), escaneamento→conectada ≤15s (SC-003), transição no WS ≤2s (SC-008), `GET /connection` <300ms p95 (SC-010)
+- [ ] T079 ⏸️ **Depende de um número real e de um aparelho — não automatizável.** Executar o roteiro **manual** de [quickstart.md](./quickstart.md) com um número real: pareamento por QR e por código, logout visto no aparelho, e duas instâncias do mesmo número conectadas por 30 min sem se derrubarem (SC-014)
+- [X] T080 [P] Rodar `golangci-lint` e a suíte completa (`go test ./...`) garantindo pipeline verde — pré-condição de merge (Princípio V)
 
 ---
 

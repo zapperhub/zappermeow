@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>ZapperMeow — Pareamento por QR</title>
+<script src="qrcode.js"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff; --fg: #16181d; --muted: #6b7280;
+    --line: #e5e7eb; --field: #ffffff;
+    --ok: #12855b; --warn: #b45309; --err: #b42318; --busy: #1d4ed8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --fg: #e8eaed; --muted: #9aa1ab;
+      --line: #2a2e35; --field: #1b1e24;
+      --ok: #3ddc97; --warn: #f0b429; --err: #ff6b6b; --busy: #7aa2ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; justify-content: center;
+  }
+  main { width: 100%; max-width: 34rem; }
+  h1 { font-size: 1.15rem; margin: 0 0 .25rem; }
+  .sub { color: var(--muted); margin: 0 0 1.5rem; font-size: .875rem; }
+  label { display: block; font-size: .8rem; color: var(--muted); margin: 0 0 .25rem; }
+  input {
+    width: 100%; padding: .55rem .7rem; margin-bottom: .9rem;
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--field); color: var(--fg); font: inherit; font-size: .9rem;
+  }
+  input:focus { outline: 2px solid var(--busy); outline-offset: -1px; }
+  button {
+    width: 100%; padding: .65rem; border: 0; border-radius: 8px; cursor: pointer;
+    background: var(--fg); color: var(--bg); font: inherit; font-weight: 600;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  .status {
+    margin: 1.25rem 0 0; padding: .7rem .85rem; border-radius: 8px;
+    border: 1px solid var(--line); font-size: .875rem;
+  }
+  .status b { font-weight: 600; }
+  .ok { color: var(--ok); } .warn { color: var(--warn); }
+  .err { color: var(--err); } .busy { color: var(--busy); }
+  #qr {
+    display: grid; place-items: center; min-height: 1rem; margin-top: 1rem;
+  }
+  /* White quiet zone is part of the symbol: scanners need the contrast even
+     when the page itself is dark. */
+  #qr img, #qr canvas { background: #fff; padding: 12px; border-radius: 10px; }
+  .expiry { text-align: center; color: var(--muted); font-size: .8rem; margin-top: .5rem; }
+  .log {
+    margin-top: 1.25rem; border-top: 1px solid var(--line); padding-top: .75rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .75rem; color: var(--muted); max-height: 11rem; overflow-y: auto;
+  }
+  .log div { padding: .1rem 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Pareamento por QR</h1>
+  <p class="sub">
+    Abre o canal de eventos da instância e mostra cada QR conforme ele é emitido.
+    Os códigos se renovam sozinhos — não é preciso reagir a tempo.
+  </p>
+
+  <label for="base">API</label>
+  <input id="base" value="http://localhost:8080" spellcheck="false">
+
+  <label for="instance">ID da instância</label>
+  <input id="instance" placeholder="019ffd52-3485-7e44-a634-98361a113252" spellcheck="false">
+
+  <label for="key">X-Api-Key da instância</label>
+  <input id="key" type="password" placeholder="zmk_..." spellcheck="false">
+
+  <button id="go">Conectar e mostrar QR</button>
+
+  <div class="status" id="status">Preencha os campos e clique em conectar.</div>
+  <div id="qr"></div>
+  <div class="expiry" id="expiry"></div>
+  <div class="log" id="log"></div>
+</main>
+
+<script>
+"use strict";
+
+const $ = (id) => document.getElementById(id);
+const els = { base: $("base"), instance: $("instance"), key: $("key"),
+              go: $("go"), status: $("status"), qr: $("qr"),
+              expiry: $("expiry"), log: $("log") };
+
+let socket = null;
+let expiryTimer = null;
+
+// Credentials live only in this tab: sessionStorage keeps a page reload from
+// costing a retype, and never outlives the browser session.
+for (const field of ["base", "instance", "key"]) {
+  const saved = sessionStorage.getItem("zm." + field);
+  if (saved) els[field].value = saved;
+  els[field].addEventListener("change", () => sessionStorage.setItem("zm." + field, els[field].value));
+}
+
+function setStatus(text, kind = "") {
+  els.status.innerHTML = kind ? `<b class="${kind}">${text}</b>` : text;
+}
+
+function log(line) {
+  const at = new Date().toLocaleTimeString();
+  const entry = document.createElement("div");
+  entry.textContent = `${at}  ${line}`;
+  els.log.prepend(entry);
+}
+
+function clearQR() {
+  els.qr.innerHTML = "";
+  els.expiry.textContent = "";
+  if (expiryTimer) { clearInterval(expiryTimer); expiryTimer = null; }
+}
+
+// The API never sends an image: the code is a string and the symbol is drawn
+// here, so the pairing code never leaves this machine.
+function renderQR(code, expiresAt) {
+  clearQR();
+
+  // Type 0 lets the library pick the smallest version that fits; WhatsApp refs
+  // run long, and error correction L keeps the modules large enough to scan.
+  const qr = qrcode(0, "L");
+  qr.addData(code);
+  qr.make();
+  els.qr.innerHTML = qr.createImgTag(6, 0);
+
+  if (!expiresAt) return;
+  const deadline = new Date(expiresAt).getTime();
+  const tick = () => {
+    const left = Math.round((deadline - Date.now()) / 1000);
+    els.expiry.textContent = left > 0
+      ? `este código expira em ${left}s — o próximo aparece sozinho`
+      : "aguardando o próximo código…";
+  };
+  tick();
+  expiryTimer = setInterval(tick, 1000);
+}
+
+// showManualFallback keeps the page useful when the browser blocks the command.
+// Listening is the hard part to do by hand; firing one request is not.
+function showManualFallback(base, instance, key) {
+  const command = `curl -X POST ${base}/instances/${instance}/connect -H "X-Api-Key: ${key}"`;
+  els.status.innerHTML =
+    `<b class="warn">O navegador bloqueou a chamada (a API não envia cabeçalhos CORS).</b><br>` +
+    `O canal está aberto e continua ouvindo. Dispare o comando abaixo e o QR aparece aqui:` +
+    `<pre style="white-space:pre-wrap;word-break:break-all;margin:.6rem 0 0;font-size:.75rem">` +
+    command.replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c])) +
+    `</pre>`;
+  log("connect bloqueado por CORS — canal segue aberto");
+}
+
+function handle(frame) {
+  switch (frame.type) {
+    case "state.snapshot": {
+      const state = frame.data.state;
+      // A client that arrives mid-attempt gets the current code in this very
+      // first frame, instead of waiting for the next rotation.
+      if (frame.data.pairing) {
+        setStatus("Escaneie o QR no WhatsApp → Dispositivos conectados", "busy");
+        renderQR(frame.data.pairing.code, frame.data.pairing.expires_at);
+      } else if (state === "connected") {
+        setStatus("Esta instância já está conectada.", "ok");
+      } else {
+        setStatus(`Estado atual: ${state}. Iniciando pareamento…`, "busy");
+      }
+      log(`snapshot: ${state}`);
+      break;
+    }
+
+    case "pairing.code":
+      setStatus("Escaneie o QR no WhatsApp → Dispositivos conectados", "busy");
+      renderQR(frame.data.code, frame.data.expires_at);
+      log(`novo código (${frame.data.method})`);
+      break;
+
+    case "pairing.succeeded": {
+      clearQR();
+      const device = frame.data.device || {};
+      setStatus(`Pareado: ${device.phone_number || ""} — ${device.jid || ""}`, "ok");
+      log(`pareado: ${device.jid}`);
+      break;
+    }
+
+    case "connection.connected":
+      setStatus("Conectado.", "ok");
+      log("conectado");
+      break;
+
+    case "pairing.expired":
+      clearQR();
+      setStatus(`A janela de pareamento terminou (${frame.data.reason}). Clique em conectar de novo.`, "warn");
+      log(`expirou: ${frame.data.reason}`);
+      break;
+
+    case "pairing.failed":
+      clearQR();
+      setStatus(`O WhatsApp recusou o pareamento: ${frame.data.reason}`, "err");
+      log(`falhou: ${frame.data.reason}`);
+      break;
+
+    case "connection.disconnected":
+      log(`desconectou: ${frame.data.reason}${frame.data.permanent ? " (definitivo)" : ""}`);
+      if (frame.data.permanent) setStatus(`Desconectado: ${frame.data.reason}`, "err");
+      break;
+
+    case "connection.logged_out":
+      clearQR();
+      setStatus("A sessão foi encerrada pelo aparelho. Conecte de novo para parear.", "warn");
+      log("deslogado pelo aparelho");
+      break;
+
+    case "connection.banned":
+      clearQR();
+      setStatus("Número banido temporariamente pelo WhatsApp.", "err");
+      log("banido");
+      break;
+
+    default:
+      log(frame.type);
+  }
+}
+
+async function start() {
+  const base = els.base.value.replace(/\/+$/, "");
+  const instance = els.instance.value.trim();
+  const key = els.key.value.trim();
+
+  if (!instance || !key) {
+    setStatus("Informe o id da instância e a API key.", "err");
+    return;
+  }
+
+  els.go.disabled = true;
+  clearQR();
+  if (socket) { socket.close(); socket = null; }
+  setStatus("Abrindo o canal de eventos…", "busy");
+
+  // The channel opens BEFORE the command: subscribing first is what keeps a
+  // code emitted in the meantime from being missed.
+  const wsURL = base.replace(/^http/, "ws") + `/instances/${instance}/ws`;
+
+  // Browsers cannot set headers on a WebSocket, so the credential rides in the
+  // subprotocol list — the API refuses tokens in the query string, which would
+  // land in proxy logs and browser history.
+  socket = new WebSocket(wsURL, ["zappermeow.v1", "bearer." + key]);
+
+  socket.onopen = async () => {
+    log("canal aberto");
+    try {
+      const resp = await fetch(`${base}/instances/${instance}/connect`, {
+        method: "POST",
+        headers: { "X-Api-Key": key, "Content-Type": "application/json" },
+      });
+      const body = await resp.json();
+      if (!resp.ok) {
+        setStatus(`${body.code || resp.status}: ${body.detail || "falha ao conectar"}`, "err");
+        log(`connect → ${resp.status} ${body.code || ""}`);
+        els.go.disabled = false;
+        return;
+      }
+      log(`connect → 202 ${body.data.state}`);
+      setStatus("Aguardando o primeiro QR…", "busy");
+    } catch (err) {
+      // The API does not send CORS headers, so a browser on another origin
+      // cannot POST to it. The channel is already open and unaffected — the
+      // QR will appear as soon as the command is fired by other means.
+      showManualFallback(base, instance, key);
+      els.go.disabled = false;
+    }
+  };
+
+  socket.onmessage = (event) => {
+    try { handle(JSON.parse(event.data)); }
+    catch (err) { log("frame inválido: " + err.message); }
+  };
+
+  socket.onerror = () => {
+    // The browser hides the handshake status for security reasons, so the
+    // likely causes are spelled out instead of a bare "error".
+    setStatus("Falha no canal de eventos. Verifique a API key, o id da instância e se a API está no ar.", "err");
+    els.go.disabled = false;
+  };
+
+  socket.onclose = (event) => {
+    clearQR();
+    els.go.disabled = false;
+    const reasons = { 4403: "credencial revogada ou tenant suspenso",
+                      4404: "instância excluída",
+                      4429: "cliente lento demais" };
+    log(`canal fechado (${event.code}${reasons[event.code] ? ": " + reasons[event.code] : ""})`);
+    if (reasons[event.code]) setStatus(reasons[event.code], "err");
+  };
+}
+
+els.go.addEventListener("click", start);
+for (const field of [els.instance, els.key]) {
+  field.addEventListener("keydown", (e) => { if (e.key === "Enter") start(); });
+}
+</script>
+</body>
+</html>

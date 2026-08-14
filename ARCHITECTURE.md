@@ -181,10 +181,42 @@ A task `webhook:deliver` resolve a configuração de webhook **da instância** (
 
 ### Pareamento (QR code)
 
-1. `POST /instances/{id}/connect` → api localiza/dispara aquisição de lease e chama `Connect` via gRPC.
-2. Cliente abre `GET /instances/{id}/ws` (ou aguarda webhook).
-3. Worker recebe os eventos `QR` do hypermeow → publica no canal Redis → api entrega pelo WebSocket.
-4. `PairSuccess` → worker persiste, emite evento de conexão estabelecida.
+1. `POST /instances/{id}/connect` → a api grava a intenção (`connection_intent = active`,
+   `desired_state = running`) e responde **202**. O QR não vem por HTTP: é um stream de códigos que
+   se renovam.
+2. Se já existe dono vivo, a api chama `Connect` por gRPC. Se **não** existe, publica o
+   `instance_id` no canal Redis `sessions:claim` — todos os workers escutam, disputam o lease e o
+   SQL decide um único vencedor. Sem esse canal o primeiro QR esperaria o tick de reconciliação,
+   estourando o orçamento de 5s.
+3. Cliente abre `GET /instances/{id}/ws`. O handshake é autenticado **antes** do upgrade, por
+   `Authorization`/`X-Api-Key` ou, para navegadores, pelo subprotocolo
+   `Sec-WebSocket-Protocol: zappermeow.v1, bearer.<token>` — token em query string é recusado,
+   porque apareceria em log de acesso e no proxy.
+4. O primeiro frame é sempre um `state.snapshot`, com o código corrente quando há tentativa em
+   curso: quem chega no meio do pareamento não fica esperando a próxima rotação. A api assina o
+   canal **antes** de ler o snapshot e deduplica pelo `seq`; a ordem inversa perderia eventos.
+5. Worker recebe os eventos `QR` do hypermeow → publica em `events:{instance_id}` → api entrega
+   pelo WebSocket.
+6. `PairSuccess` → worker persiste a identidade do dispositivo (JID **com** o sufixo de device) e
+   emite o evento de conexão estabelecida.
+
+**Ordem não garantida:** `PairSuccess` chega pelo canal de QR e `Connected` pelo handler de eventos
+do cliente; nada ordena os dois. O worker persiste a identidade em qualquer um dos caminhos, para
+que a instância nunca fique "conectada" sem device registrado.
+
+### Suspensão de tenant
+
+Suspender grava `desired_state = stopped` em todos os leases do tenant **e** publica em
+`sessions:stop`, para que os donos larguem as sessões em segundos em vez de esperar a
+reconciliação. A intenção por instância não é tocada: reativar restaura exatamente o que o tenant
+tinha rodando, e uma instância que ele havia desligado continua desligada.
+
+### Retenção da trilha
+
+A limpeza de `connection_events` roda no `session-worker` sob `pg_try_advisory_lock`, não como task
+asynq: subir o serviço `jobs` inteiro para um `DELETE` diário seria desproporcional. Quem toma o
+lock varre, os demais pulam sem bloquear. Quando os webhooks trouxerem o `jobs`, a varredura migra
+para lá.
 
 ## Topologia de deploy
 

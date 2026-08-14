@@ -1,0 +1,151 @@
+# ZapperMeow on Docker Swarm.
+#
+# Same image and same services as the Compose target; what differs is only what
+# has to: placement constraints, replica counts, native secrets and an overlay
+# network. Any change to the service topology belongs in docker-compose.yml as
+# well — the constitution requires functional parity between the two targets.
+#
+#   docker stack deploy -c deploy/stack.yml zappermeow
+#
+# Secrets are created beforehand, e.g.:
+#   printf %s "$DSN" | docker secret create zappermeow_database_url -
+
+version: "3.9"
+
+x-app-env: &app-env
+  ZAPPERMEOW_REDIS_ADDR: redis:6379
+  ZAPPERMEOW_LOG_LEVEL: info
+  ZAPPERMEOW_SECRETS_DIR: /run/secrets
+
+services:
+  traefik:
+    image: traefik:v3.3
+    command:
+      - --providers.swarm=true
+      - --providers.swarm.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-acme:/acme
+    networks: [edge, internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.role == manager]
+
+  api:
+    image: zappermeow:latest
+    command: ["serve"]
+    environment:
+      <<: *app-env
+      ZAPPERMEOW_LISTEN_ADDR: ":8080"
+    secrets: [database_url, redis_password, jwt_signing_key, bootstrap_email, bootstrap_password]
+    networks: [edge, internal]
+    deploy:
+      # Stateless: replicas scale freely, and no request depends on which one
+      # answers it.
+      replicas: 2
+      update_config:
+        order: start-first
+      labels:
+        traefik.enable: "true"
+        traefik.http.routers.api.rule: Host(`${ZAPPERMEOW_HOST:-localhost}`)
+        traefik.http.routers.api.entrypoints: websecure
+        traefik.http.services.api.loadbalancer.server.port: "8080"
+        # Sticky only for the WebSocket; every other route is stateless.
+        traefik.http.services.api.loadbalancer.sticky.cookie: "true"
+        traefik.http.services.api.loadbalancer.sticky.cookie.name: zappermeow_ws
+
+  session-worker:
+    image: zappermeow:latest
+    command: ["session-worker"]
+    environment:
+      <<: *app-env
+      ZAPPERMEOW_WORKER_GRPC_LISTEN_ADDR: ":9090"
+      # No advertise address: each task registers its own container hostname in
+      # the lease, and the API dials exactly that. Pointing this at the service
+      # VIP would load-balance commands to processes that do not own the
+      # session, which is the one thing the lease exists to prevent.
+      ZAPPERMEOW_MAX_SESSIONS_PER_WORKER: "200"
+    secrets: [database_url, redis_password]
+    networks: [internal]
+    deploy:
+      replicas: 2
+      placement:
+        constraints: [node.labels.zappermeow.sessions == true]
+      update_config:
+        # One worker at a time, and only after the previous one has drained:
+        # rolling them together would move every session at once.
+        parallelism: 1
+        order: stop-first
+        delay: 30s
+      restart_policy:
+        condition: any
+    # Long enough for the drain to hand back every lease. Cut it short and each
+    # session waits out the 30s expiry instead of moving in seconds.
+    stop_grace_period: 60s
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: zappermeow
+      POSTGRES_USER: zappermeow
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        # Pinned to the node holding the volume: the database is the source of
+        # truth for session ownership and cannot move freely.
+        constraints: [node.labels.zappermeow.data == true]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks: [internal]
+    deploy:
+      replicas: 1
+      placement:
+        constraints: [node.labels.zappermeow.data == true]
+
+volumes:
+  postgres-data:
+  redis-data:
+  traefik-acme:
+
+networks:
+  edge:
+    driver: overlay
+  internal:
+    driver: overlay
+    # gRPC, Postgres and Redis never leave the private overlay.
+    internal: true
+
+secrets:
+  database_url:
+    external: true
+    name: zappermeow_database_url
+  redis_password:
+    external: true
+    name: zappermeow_redis_password
+  jwt_signing_key:
+    external: true
+    name: zappermeow_jwt_signing_key
+  bootstrap_email:
+    external: true
+    name: zappermeow_bootstrap_email
+  bootstrap_password:
+    external: true
+    name: zappermeow_bootstrap_password
+  postgres_password:
+    external: true
+    name: zappermeow_postgres_password

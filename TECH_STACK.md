@@ -19,7 +19,7 @@ Stack tecnológica da **ZapperMeow** — API RESTful multi-tenant sobre a biblio
 | Cache e rate limiting | Redis + redis_rate |
 | Autenticação | API Key por instância + JWT (admin da plataforma e do tenant) |
 | Armazenamento de mídia | MinIO (S3-compatible) |
-| Entrega de eventos | Webhooks HTTP (HMAC) + WebSocket |
+| Entrega de eventos | Webhooks HTTP (HMAC) + WebSocket (`coder/websocket`) |
 | Configuração | Env vars (caarlos0/env) + secrets do runtime de deploy |
 | Logs / métricas / traces | log/slog + Prometheus + OpenTelemetry |
 | Testes | testify + testcontainers-go |
@@ -127,7 +127,7 @@ Object storage S3-compatible rodando como serviço na própria stack (Swarm ou C
 Dois canais complementares, alimentados pelos ~75 tipos de eventos do HyperMeow:
 
 1. **Webhooks HTTP** — canal principal. POST assinado (HMAC) na URL configurada **por instância** (cada uma com sua URL, filtro de tipos de evento e segredo próprios), com retries exponenciais via asynq e dead-letter queue. Instâncias diferentes do mesmo tenant podem apontar para consumidores diferentes.
-2. **WebSocket** — canal em tempo real por instância (`/instances/{id}/ws`), útil para o fluxo de QR code no pareamento e para clientes atrás de NAT que não podem expor URL pública.
+2. **WebSocket** — canal em tempo real por instância (`/instances/{id}/ws`), útil para o fluxo de QR code no pareamento e para clientes atrás de NAT que não podem expor URL pública. Implementado com `coder/websocket` (zero dependências transitivas, API `context`-first) e montado como handler chi fora do huma: um upgrade não é resposta JSON e não cabe nos schemas do OpenAPI. Como consequência, ele **não herda** a cadeia de middlewares — autenticação, rate limiting e log estruturado são aplicados explicitamente no handler.
 
 ## Configuração
 
@@ -183,6 +183,8 @@ github.com/golang-jwt/jwt/v5            // JWT admin
 github.com/minio/minio-go/v7            // cliente S3/MinIO
 github.com/caarlos0/env/v11             // config por env vars
 github.com/prometheus/client_golang     // métricas
+github.com/coder/websocket              // canal de eventos por instância
+google.golang.org/grpc                  // contrato interno api↔worker
 go.opentelemetry.io/otel                // traces
 github.com/stretchr/testify             // asserts em testes
 github.com/testcontainers/testcontainers-go // integração com infra real
