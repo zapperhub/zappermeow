@@ -27,7 +27,33 @@ func (f *fixture) wsServer(t *testing.T) *httptest.Server {
 	return server
 }
 
-func dialWS(t *testing.T, server *httptest.Server, instanceID string, opts *coderws.DialOptions) (*coderws.Conn, *http.Response, error) {
+// dialWS opens a channel that is expected to succeed. Refusals go through
+// dialWSRefused, which is the only place a handshake response is inspected —
+// splitting them keeps the success path from carrying a body nobody reads.
+func dialWS(t *testing.T, server *httptest.Server, instanceID string, opts *coderws.DialOptions) (*coderws.Conn, error) {
+	t.Helper()
+	conn, resp, err := dialWSRaw(t, server, instanceID, opts)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	return conn, err
+}
+
+// dialWSRefused expects the handshake to be rejected and returns the status.
+func dialWSRefused(t *testing.T, server *httptest.Server, instanceID string, opts *coderws.DialOptions) int {
+	t.Helper()
+
+	conn, resp, err := dialWSRaw(t, server, instanceID, opts)
+	require.Error(t, err, "the handshake was expected to fail")
+	require.NotNil(t, resp)
+	defer func() { _ = resp.Body.Close() }()
+	if conn != nil {
+		_ = conn.Close(coderws.StatusNormalClosure, "")
+	}
+	return resp.StatusCode
+}
+
+func dialWSRaw(t *testing.T, server *httptest.Server, instanceID string, opts *coderws.DialOptions) (*coderws.Conn, *http.Response, error) {
 	t.Helper()
 
 	if opts.Subprotocols == nil {
@@ -59,7 +85,7 @@ func TestWebSocketDeliversASnapshotToAnAPIKey(t *testing.T) {
 	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
 	server := f.wsServer(t)
 
-	conn, _, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{
+	conn, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{
 		HTTPHeader: http.Header{"X-Api-Key": {setup.key}},
 	})
 	require.NoError(t, err)
@@ -77,7 +103,7 @@ func TestWebSocketAcceptsATenantToken(t *testing.T) {
 	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
 	server := f.wsServer(t)
 
-	conn, _, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{
+	conn, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{
 		HTTPHeader: http.Header{"Authorization": {"Bearer " + setup.tenant.token}},
 	})
 	require.NoError(t, err)
@@ -93,7 +119,7 @@ func TestWebSocketAcceptsTheSubprotocolCredential(t *testing.T) {
 	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
 	server := f.wsServer(t)
 
-	conn, _, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{
+	conn, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{
 		Subprotocols: []string{ws.Subprotocol, "bearer." + setup.key},
 	})
 	require.NoError(t, err)
@@ -108,12 +134,10 @@ func TestWebSocketRefusesAKeyFromAnotherInstance(t *testing.T) {
 	sibling := f.createInstance(setup.tenant.token, "vendas-02")
 	server := f.wsServer(t)
 
-	_, resp, err := dialWS(t, server, sibling.ID, &coderws.DialOptions{
+	status := dialWSRefused(t, server, sibling.ID, &coderws.DialOptions{
 		HTTPHeader: http.Header{"X-Api-Key": {setup.key}},
 	})
-	require.Error(t, err)
-	require.NotNil(t, resp)
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.Equal(t, http.StatusNotFound, status)
 }
 
 func TestWebSocketRefusesAnotherTenant(t *testing.T) {
@@ -122,12 +146,10 @@ func TestWebSocketRefusesAnotherTenant(t *testing.T) {
 	intruder := f.newTenant(f.platformToken(), "Globex", "bob@globex.com", "senhaBob123")
 	server := f.wsServer(t)
 
-	_, resp, err := dialWS(t, server, owner.instanceID, &coderws.DialOptions{
+	status := dialWSRefused(t, server, owner.instanceID, &coderws.DialOptions{
 		HTTPHeader: http.Header{"Authorization": {"Bearer " + intruder.token}},
 	})
-	require.Error(t, err)
-	require.NotNil(t, resp)
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.Equal(t, http.StatusNotFound, status)
 }
 
 func TestWebSocketRefusesWithoutACredential(t *testing.T) {
@@ -135,10 +157,8 @@ func TestWebSocketRefusesWithoutACredential(t *testing.T) {
 	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
 	server := f.wsServer(t)
 
-	_, resp, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{})
-	require.Error(t, err)
-	require.NotNil(t, resp)
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	status := dialWSRefused(t, server, setup.instanceID, &coderws.DialOptions{})
+	assert.Equal(t, http.StatusUnauthorized, status)
 }
 
 // US1 scenario 4: a client that opens the channel mid-pairing must see the
@@ -158,7 +178,7 @@ func TestWebSocketSnapshotCarriesTheCurrentPairingCode(t *testing.T) {
 		ExpiresAt: time.Now().Add(20 * time.Second),
 	}))
 
-	conn, _, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{
+	conn, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{
 		HTTPHeader: http.Header{"X-Api-Key": {setup.key}},
 	})
 	require.NoError(t, err)
@@ -178,11 +198,11 @@ func TestWebSocketFansOutToEveryListener(t *testing.T) {
 	server := f.wsServer(t)
 
 	header := http.Header{"X-Api-Key": {setup.key}}
-	first, _, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{HTTPHeader: header})
+	first, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{HTTPHeader: header})
 	require.NoError(t, err)
 	defer func() { _ = first.Close(coderws.StatusNormalClosure, "") }()
 
-	second, _, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{HTTPHeader: header})
+	second, err := dialWS(t, server, setup.instanceID, &coderws.DialOptions{HTTPHeader: header})
 	require.NoError(t, err)
 	defer func() { _ = second.Close(coderws.StatusNormalClosure, "") }()
 

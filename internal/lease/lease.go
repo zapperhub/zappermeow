@@ -14,8 +14,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/zapperhub/zappermeow/internal/domain"
 	"github.com/zapperhub/zappermeow/internal/store"
 )
@@ -72,7 +70,7 @@ func (m *Manager) WorkerID() string { return m.workerID }
 // Ensure creates the lease row for an instance if it does not exist yet. The
 // row starts stopped: creating it must never be enough to start a session.
 func (m *Manager) Ensure(ctx context.Context, instanceID domain.ID) error {
-	if err := m.queries.EnsureLease(ctx, uuid.UUID(instanceID)); err != nil {
+	if err := m.queries.EnsureLease(ctx, instanceID); err != nil {
 		return fmt.Errorf("ensure lease: %w", err)
 	}
 	return nil
@@ -82,7 +80,7 @@ func (m *Manager) Ensure(ctx context.Context, instanceID domain.ID) error {
 // the instance intent and the tenant status, never set directly by a user.
 func (m *Manager) SetDesired(ctx context.Context, instanceID domain.ID, desired string) error {
 	err := m.queries.SetDesiredState(ctx, store.SetDesiredStateParams{
-		InstanceID:   uuid.UUID(instanceID),
+		InstanceID:   instanceID,
 		DesiredState: desired,
 	})
 	if err != nil {
@@ -96,7 +94,7 @@ func (m *Manager) SetDesired(ctx context.Context, instanceID domain.ID, desired 
 // reactivation can restore exactly what was running.
 func (m *Manager) SetTenantDesired(ctx context.Context, tenantID domain.ID, desired string) error {
 	err := m.queries.SetTenantDesiredState(ctx, store.SetTenantDesiredStateParams{
-		TenantID:     uuid.UUID(tenantID),
+		TenantID:     tenantID,
 		DesiredState: desired,
 	})
 	if err != nil {
@@ -111,7 +109,7 @@ func (m *Manager) SetTenantDesired(ctx context.Context, tenantID domain.ID, desi
 // ErrNotAcquired — there is no second winner to reconcile later.
 func (m *Manager) Acquire(ctx context.Context, instanceID domain.ID) (int64, error) {
 	generation, err := m.queries.AcquireLease(ctx, store.AcquireLeaseParams{
-		InstanceID: uuid.UUID(instanceID),
+		InstanceID: instanceID,
 		WorkerID:   &m.workerID,
 		GrpcAddr:   &m.grpcAddr,
 		Expiry:     store.Interval(m.expiry),
@@ -139,7 +137,7 @@ func (m *Manager) Heartbeat(ctx context.Context) (map[domain.ID]int64, error) {
 
 	held := make(map[domain.ID]int64, len(rows))
 	for _, row := range rows {
-		held[domain.ID(row.InstanceID)] = row.Generation
+		held[row.InstanceID] = row.Generation
 	}
 	return held, nil
 }
@@ -149,7 +147,7 @@ func (m *Manager) Heartbeat(ctx context.Context) (map[domain.ID]int64, error) {
 // expiry.
 func (m *Manager) Release(ctx context.Context, instanceID domain.ID) error {
 	err := m.queries.ReleaseLease(ctx, store.ReleaseLeaseParams{
-		InstanceID: uuid.UUID(instanceID),
+		InstanceID: instanceID,
 		WorkerID:   &m.workerID,
 	})
 	if err != nil {
@@ -182,7 +180,7 @@ func (m *Manager) Adoptable(ctx context.Context, limit int32) ([]domain.ID, erro
 
 	ids := make([]domain.ID, 0, len(rows))
 	for _, row := range rows {
-		ids = append(ids, domain.ID(row.InstanceID))
+		ids = append(ids, row.InstanceID)
 	}
 	return ids, nil
 }
@@ -199,7 +197,7 @@ type Owner struct {
 // Owner reads who currently holds a session.
 func (m *Manager) Owner(ctx context.Context, instanceID domain.ID) (Owner, error) {
 	row, err := m.queries.GetLeaseOwner(ctx, store.GetLeaseOwnerParams{
-		InstanceID: uuid.UUID(instanceID),
+		InstanceID: instanceID,
 		Expiry:     store.Interval(m.expiry),
 	})
 	if err != nil {
@@ -230,7 +228,7 @@ func (m *Manager) Count(ctx context.Context) (int64, error) {
 // must pass. A process that lost its lease — to a long GC pause, a network
 // partition, whatever — fails here and cannot touch the session.
 func (m *Manager) CheckGeneration(ctx context.Context, instanceID domain.ID, generation int64) error {
-	row, err := m.queries.GetLease(ctx, uuid.UUID(instanceID))
+	row, err := m.queries.GetLease(ctx, instanceID)
 	if err != nil {
 		if store.IsNoRows(err) {
 			return ErrNotAcquired

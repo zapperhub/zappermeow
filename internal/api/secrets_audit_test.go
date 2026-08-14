@@ -5,6 +5,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/zapperhub/zappermeow/internal/domain"
+	"github.com/zapperhub/zappermeow/internal/events"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -156,4 +160,74 @@ func TestRejectedContentTypeDoesNotEchoTheCredentials(t *testing.T) {
 	assert.Contains(t, body, "UNSUPPORTED_MEDIA_TYPE", "a client mistake must not report an internal error")
 	assert.NotContains(t, body, "INTERNAL_ERROR")
 	assert.NotContains(t, f.logs.String(), bootstrapPassword)
+}
+
+// The connection feature adds a QR code, a pairing code and a device identity
+// to what flows through the system. None of them may reach a log line, and the
+// two codes are credentials in their own right: whoever holds one can link a
+// device to the customer's number (FR-043).
+func TestConnectionMaterialNeverReachesLogsOrTheTrail(t *testing.T) {
+	f := newFixture(t)
+	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
+
+	instanceID, err := domain.ParseID("instance", setup.instanceID)
+	require.NoError(t, err)
+
+	// A pairing attempt in flight, as the worker would leave it.
+	publisher := events.NewPublisher(f.infra.Redis)
+	const qrCode = "2@SecretQrPayloadThatMustNeverBeLogged"
+	require.NoError(t, publisher.SetPairing(t.Context(), instanceID, events.PairingSnapshot{
+		Method:    "qr",
+		Code:      qrCode,
+		ExpiresAt: time.Now().Add(20 * time.Second),
+	}))
+
+	// Walk the routes that touch connection material.
+	var bodies []string
+	record := func(r *response) { bodies = append(bodies, string(r.Body)) }
+
+	record(f.do(request{method: http.MethodPost, path: "/instances/" + setup.instanceID + "/connect", apiKey: setup.key}))
+	record(f.do(request{method: http.MethodGet, path: "/instances/" + setup.instanceID + "/connection", apiKey: setup.key}))
+	record(f.do(request{method: http.MethodGet, path: "/instances/" + setup.instanceID + "/connection/events", apiKey: setup.key}))
+	record(f.do(request{method: http.MethodPost, path: "/instances/" + setup.instanceID + "/disconnect", apiKey: setup.key}))
+
+	logs := f.logs.String()
+
+	t.Run("the QR code never reaches a log line", func(t *testing.T) {
+		assert.NotContains(t, logs, qrCode,
+			"a logged QR code lets anyone with log access link a device to the customer's number")
+	})
+
+	t.Run("the api key never reaches a log line", func(t *testing.T) {
+		assert.NotContains(t, logs, setup.key)
+	})
+
+	t.Run("no HTTP response echoes the QR code", func(t *testing.T) {
+		// The code belongs to the event channel; the REST surface never carries
+		// it, precisely so it cannot end up in a proxy log or a browser cache.
+		for i, body := range bodies {
+			assert.NotContains(t, body, qrCode, "response %d carried the pairing code", i)
+		}
+	})
+
+	t.Run("the connection trail carries no credential", func(t *testing.T) {
+		rows, err := f.infra.Pool.Query(t.Context(),
+			`SELECT coalesce(detail::text, '') FROM connection_events WHERE instance_id = $1`, setup.instanceID)
+		require.NoError(t, err)
+		defer rows.Close()
+
+		for rows.Next() {
+			var detail string
+			require.NoError(t, rows.Scan(&detail))
+			assert.NotContains(t, detail, qrCode)
+			assert.NotContains(t, detail, setup.key)
+		}
+	})
+
+	// Correlation, on the other hand, is required: every connection log line
+	// must carry the tenant and the instance (principle VI).
+	t.Run("logs carry tenant and instance for correlation", func(t *testing.T) {
+		assert.Contains(t, logs, setup.instanceID,
+			"without the instance id an incident cannot be traced to a number")
+	})
 }

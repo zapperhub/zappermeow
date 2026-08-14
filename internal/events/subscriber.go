@@ -93,8 +93,9 @@ func (s *Subscriber) pump(ctx context.Context, instanceID domain.ID, pubsub *red
 			select {
 			case stream.events <- envelope:
 			default:
+				// The pump returns right after, so this can only run once;
+				// the guard documents that closing twice would panic.
 				if !overflowSignalled {
-					overflowSignalled = true
 					close(stream.overflowed)
 					s.logger.Warn("websocket consumer fell behind, closing stream",
 						slog.String("instance_id", instanceID.String()))

@@ -103,7 +103,30 @@ func setup(t *testing.T) *fixture {
 
 func (f *fixture) url() string { return "ws" + strings.TrimPrefix(f.server.URL, "http") }
 
-func (f *fixture) dial(t *testing.T, opts *coderws.DialOptions) (*coderws.Conn, *http.Response, error) {
+func (f *fixture) dial(t *testing.T, opts *coderws.DialOptions) (*coderws.Conn, error) {
+	t.Helper()
+	conn, resp, err := f.dialRaw(t, opts)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	return conn, err
+}
+
+// dialRefused expects the handshake to be rejected and returns the status.
+func (f *fixture) dialRefused(t *testing.T, opts *coderws.DialOptions) int {
+	t.Helper()
+
+	conn, resp, err := f.dialRaw(t, opts)
+	require.Error(t, err, "the handshake was expected to fail")
+	require.NotNil(t, resp)
+	defer func() { _ = resp.Body.Close() }()
+	if conn != nil {
+		_ = conn.Close(coderws.StatusNormalClosure, "")
+	}
+	return resp.StatusCode
+}
+
+func (f *fixture) dialRaw(t *testing.T, opts *coderws.DialOptions) (*coderws.Conn, *http.Response, error) {
 	t.Helper()
 	if opts == nil {
 		opts = &coderws.DialOptions{}
@@ -134,22 +157,18 @@ func readFrame(t *testing.T, conn *coderws.Conn) events.Envelope {
 func TestHandshakeRequiresACredential(t *testing.T) {
 	f := setup(t)
 
-	_, resp, err := f.dial(t, &coderws.DialOptions{})
-	require.Error(t, err, "no credential means no socket")
-	require.NotNil(t, resp)
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+	status := f.dialRefused(t, &coderws.DialOptions{})
+	assert.Equal(t, http.StatusUnauthorized, status,
 		"the refusal must be an HTTP status, not a socket that closes right after opening")
 }
 
 func TestHandshakeRejectsAnInvalidCredential(t *testing.T) {
 	f := setup(t)
 
-	_, resp, err := f.dial(t, &coderws.DialOptions{
+	status := f.dialRefused(t, &coderws.DialOptions{
 		HTTPHeader: http.Header{"X-Api-Key": {"zmk_wrong"}},
 	})
-	require.Error(t, err)
-	require.NotNil(t, resp)
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Equal(t, http.StatusForbidden, status)
 }
 
 // A token in the query string would be recorded by every proxy in the path, so
@@ -160,18 +179,22 @@ func TestTokenInQueryStringIsRefused(t *testing.T) {
 	ctx, cancel := context.WithTimeout(f.ctx, 5*time.Second)
 	defer cancel()
 
-	_, resp, err := coderws.Dial(ctx, f.url()+"?token=zmk_secret", &coderws.DialOptions{
+	conn, resp, err := coderws.Dial(ctx, f.url()+"?token=zmk_secret", &coderws.DialOptions{
 		Subprotocols: []string{ws.Subprotocol},
 	})
 	require.Error(t, err)
 	require.NotNil(t, resp)
+	defer func() { _ = resp.Body.Close() }()
+	if conn != nil {
+		_ = conn.Close(coderws.StatusNormalClosure, "")
+	}
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
 func TestApiKeyHeaderIsAccepted(t *testing.T) {
 	f := setup(t)
 
-	conn, _, err := f.dial(t, &coderws.DialOptions{
+	conn, err := f.dial(t, &coderws.DialOptions{
 		HTTPHeader: http.Header{"X-Api-Key": {"zmk_secret"}},
 	})
 	require.NoError(t, err)
@@ -183,7 +206,7 @@ func TestApiKeyHeaderIsAccepted(t *testing.T) {
 func TestBearerHeaderIsAccepted(t *testing.T) {
 	f := setup(t)
 
-	conn, _, err := f.dial(t, &coderws.DialOptions{
+	conn, err := f.dial(t, &coderws.DialOptions{
 		HTTPHeader: http.Header{"Authorization": {"Bearer zmk_secret"}},
 	})
 	require.NoError(t, err)
@@ -197,7 +220,7 @@ func TestBearerHeaderIsAccepted(t *testing.T) {
 func TestSubprotocolCredentialIsAccepted(t *testing.T) {
 	f := setup(t)
 
-	conn, _, err := f.dial(t, &coderws.DialOptions{
+	conn, err := f.dial(t, &coderws.DialOptions{
 		Subprotocols: []string{ws.Subprotocol, "bearer.zmk_secret"},
 	})
 	require.NoError(t, err)
@@ -215,7 +238,7 @@ func TestSnapshotIsAlwaysTheFirstFrame(t *testing.T) {
 		Data: map[string]any{"state": "pairing", "pairing": map[string]any{"code": "2@AbC"}},
 	}
 
-	conn, _, err := f.dial(t, &coderws.DialOptions{
+	conn, err := f.dial(t, &coderws.DialOptions{
 		HTTPHeader: http.Header{"X-Api-Key": {"zmk_secret"}},
 	})
 	require.NoError(t, err)
@@ -235,7 +258,7 @@ func TestSnapshotIsAlwaysTheFirstFrame(t *testing.T) {
 func TestLiveEventsFollowTheSnapshot(t *testing.T) {
 	f := setup(t)
 
-	conn, _, err := f.dial(t, &coderws.DialOptions{
+	conn, err := f.dial(t, &coderws.DialOptions{
 		HTTPHeader: http.Header{"X-Api-Key": {"zmk_secret"}},
 	})
 	require.NoError(t, err)
@@ -272,7 +295,7 @@ func TestEventsAlreadyInTheSnapshotAreNotResent(t *testing.T) {
 	require.NoError(t, err)
 	f.snapshot.envelope = events.Envelope{Type: events.TypeStateSnapshot, Seq: published.Seq}
 
-	conn, _, err := f.dial(t, &coderws.DialOptions{
+	conn, err := f.dial(t, &coderws.DialOptions{
 		HTTPHeader: http.Header{"X-Api-Key": {"zmk_secret"}},
 	})
 	require.NoError(t, err)
@@ -297,11 +320,11 @@ func TestSeveralListenersReceiveTheSameEvents(t *testing.T) {
 	f := setup(t)
 
 	header := http.Header{"X-Api-Key": {"zmk_secret"}}
-	first, _, err := f.dial(t, &coderws.DialOptions{HTTPHeader: header})
+	first, err := f.dial(t, &coderws.DialOptions{HTTPHeader: header})
 	require.NoError(t, err)
 	defer func() { _ = first.Close(coderws.StatusNormalClosure, "") }()
 
-	second, _, err := f.dial(t, &coderws.DialOptions{HTTPHeader: header})
+	second, err := f.dial(t, &coderws.DialOptions{HTTPHeader: header})
 	require.NoError(t, err)
 	defer func() { _ = second.Close(coderws.StatusNormalClosure, "") }()
 
@@ -323,7 +346,7 @@ func TestSeveralListenersReceiveTheSameEvents(t *testing.T) {
 func TestRevokedCredentialClosesTheConnection(t *testing.T) {
 	f := setup(t)
 
-	conn, _, err := f.dial(t, &coderws.DialOptions{
+	conn, err := f.dial(t, &coderws.DialOptions{
 		HTTPHeader: http.Header{"X-Api-Key": {"zmk_secret"}},
 	})
 	require.NoError(t, err)
@@ -349,12 +372,10 @@ func TestHandshakeIsRateLimited(t *testing.T) {
 	f := setup(t)
 	f.limiter.allow.Store(false)
 
-	_, resp, err := f.dial(t, &coderws.DialOptions{
+	status := f.dialRefused(t, &coderws.DialOptions{
 		HTTPHeader: http.Header{"X-Api-Key": {"zmk_secret"}},
 	})
-	require.Error(t, err)
-	require.NotNil(t, resp)
-	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode,
+	assert.Equal(t, http.StatusTooManyRequests, status,
 		"refusing before the upgrade costs less than opening a socket to close it")
 	assert.Equal(t, int32(1), f.limiter.calls.Load())
 }
@@ -364,9 +385,8 @@ func TestHandshakeIsRateLimited(t *testing.T) {
 func TestRateLimitIsCheckedAfterAuthentication(t *testing.T) {
 	f := setup(t)
 
-	_, _, err := f.dial(t, &coderws.DialOptions{
+	f.dialRefused(t, &coderws.DialOptions{
 		HTTPHeader: http.Header{"X-Api-Key": {"zmk_wrong"}},
 	})
-	require.Error(t, err)
 	assert.Equal(t, int32(0), f.limiter.calls.Load())
 }

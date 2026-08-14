@@ -35,7 +35,7 @@ func seedInstance(t *testing.T, infra *testutil.Infra) domain.ID {
 		instanceID, tenantID, "instance-"+instanceID.String()[:8])
 	require.NoError(t, err)
 
-	return domain.ID(instanceID)
+	return instanceID
 }
 
 func newManager(infra *testutil.Infra, workerID, addr string) *lease.Manager {
@@ -145,7 +145,7 @@ func TestExpiredLeaseIsAdoptedWithNewGeneration(t *testing.T) {
 	// Simulate a process that died: no more heartbeats, expiry elapsed.
 	_, err = infra.Pool.Exec(ctx,
 		`UPDATE session_leases SET heartbeat_at = now() - interval '2 minutes' WHERE instance_id = $1`,
-		uuid.UUID(instanceID))
+		instanceID)
 	require.NoError(t, err)
 
 	alive := newManager(infra, "worker-alive", "10.0.0.2:9090")
@@ -205,7 +205,7 @@ func TestHeartbeatReportsOnlyLeasesStillHeld(t *testing.T) {
 	// Another worker takes one of them over after an expiry.
 	_, err := infra.Pool.Exec(ctx,
 		`UPDATE session_leases SET heartbeat_at = now() - interval '2 minutes' WHERE instance_id = $1`,
-		uuid.UUID(stolen))
+		stolen)
 	require.NoError(t, err)
 	thief := newManager(infra, "worker-b", "10.0.0.2:9090")
 	_, err = thief.Acquire(ctx, stolen)
@@ -267,7 +267,7 @@ func TestAdoptableSkipsPermanentFailures(t *testing.T) {
 		banned:    domain.ReasonTemporaryBan,
 	} {
 		_, err := infra.Pool.Exec(ctx,
-			`UPDATE instances SET last_disconnect_reason = $2 WHERE id = $1`, uuid.UUID(id), string(reason))
+			`UPDATE instances SET last_disconnect_reason = $2 WHERE id = $1`, id, string(reason))
 		require.NoError(t, err)
 	}
 
@@ -329,7 +329,7 @@ func TestOwnerReportsStaleHeartbeatAsNotLive(t *testing.T) {
 
 	_, err = infra.Pool.Exec(ctx,
 		`UPDATE session_leases SET heartbeat_at = now() - interval '2 minutes' WHERE instance_id = $1`,
-		uuid.UUID(instanceID))
+		instanceID)
 	require.NoError(t, err)
 
 	owner, err = worker.Owner(ctx, instanceID)
@@ -351,7 +351,7 @@ func TestSetTenantDesiredProjectsOntoEveryInstance(t *testing.T) {
 			`INSERT INTO instances (id, tenant_id, name, connection_intent) VALUES ($1, $2, $3, 'active')`,
 			id, ctxTenant, "inst-"+string(rune('a'+i)))
 		require.NoError(t, err)
-		ids = append(ids, domain.ID(id))
+		ids = append(ids, id)
 	}
 
 	worker := newManager(infra, "worker-a", "10.0.0.1:9090")
@@ -361,7 +361,7 @@ func TestSetTenantDesiredProjectsOntoEveryInstance(t *testing.T) {
 	}
 
 	// Suspension stops every session of the tenant...
-	require.NoError(t, worker.SetTenantDesired(ctx, domain.ID(ctxTenant), lease.DesiredStopped))
+	require.NoError(t, worker.SetTenantDesired(ctx, ctxTenant, lease.DesiredStopped))
 	adoptable, err := worker.Adoptable(ctx, 10)
 	require.NoError(t, err)
 	assert.Empty(t, adoptable)
@@ -401,9 +401,9 @@ func TestUnknownInstanceIsNotAcquirable(t *testing.T) {
 	infra, ctx := setup(t)
 	worker := newManager(infra, "worker-a", "10.0.0.1:9090")
 
-	_, err := worker.Acquire(ctx, domain.ID(uuid.New()))
+	_, err := worker.Acquire(ctx, uuid.New())
 	assert.ErrorIs(t, err, lease.ErrNotAcquired)
 
-	_, err = worker.Owner(ctx, domain.ID(uuid.New()))
+	_, err = worker.Owner(ctx, uuid.New())
 	assert.ErrorIs(t, err, lease.ErrNotAcquired)
 }

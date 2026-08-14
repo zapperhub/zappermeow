@@ -21,14 +21,14 @@ import (
 // Detail strings the API maps back onto HTTP problem codes. They are part of
 // the internal contract, so changing one is a coordinated deploy.
 const (
-	DetailWrongGeneration  = "WRONG_GENERATION"
-	DetailNotPaired        = "NOT_PAIRED"
-	DetailAlreadyPaired    = "ALREADY_PAIRED"
-	DetailInvalidPhone     = "INVALID_PHONE_NUMBER"
-	DetailPairingRunning   = "PAIRING_IN_PROGRESS"
-	DetailDraining         = "DRAINING"
-	DetailUpstreamFailure  = "UPSTREAM_FAILURE"
-	DetailUnknownInstance  = "UNKNOWN_INSTANCE"
+	DetailWrongGeneration = "WRONG_GENERATION"
+	DetailNotPaired       = "NOT_PAIRED"
+	DetailAlreadyPaired   = "ALREADY_PAIRED"
+	DetailInvalidPhone    = "INVALID_PHONE_NUMBER"
+	DetailPairingRunning  = "PAIRING_IN_PROGRESS"
+	DetailDraining        = "DRAINING"
+	DetailUpstreamFailure = "UPSTREAM_FAILURE"
+	DetailUnknownInstance = "UNKNOWN_INSTANCE"
 )
 
 // GRPCServer exposes SessionService over the private network.

@@ -74,6 +74,14 @@ SELECT id FROM instances
 WHERE tenant_id = $1 AND phone_number = $2 AND id <> $3
 ORDER BY created_at;
 
+-- name: ListInstanceIDsByTenant :many
+SELECT id FROM instances WHERE tenant_id = $1;
+
+-- name: ListActiveIntentInstancesByTenant :many
+-- Instances the tenant had asked to keep online. Reactivation restores these
+-- and nothing else, so an instance the user had disconnected stays down.
+SELECT id FROM instances WHERE tenant_id = $1 AND connection_intent = 'active';
+
 -- name: ClearDeviceMaterial :exec
 -- Drops the device identity while leaving the connection state alone.
 -- A remote logout destroys the material on both sides, so the row must stop

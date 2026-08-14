@@ -9,6 +9,7 @@ import (
 	"github.com/zapperhub/zappermeow/internal/domain"
 	"github.com/zapperhub/zappermeow/internal/events"
 	"github.com/zapperhub/zappermeow/internal/lease"
+	"github.com/zapperhub/zappermeow/internal/metrics"
 	"github.com/zapperhub/zappermeow/internal/store"
 	"github.com/zapperhub/zappermeow/internal/wa"
 )
@@ -50,6 +51,7 @@ func (s *Supervisor) handle(ctx context.Context, managed *managedSession, evt wa
 		managed.cancelPairing()
 		_ = s.publisher.ClearPairing(ctx, instanceID)
 		s.restoreStateAfterPairing(ctx, managed)
+		metrics.PairingAttempts.WithLabelValues(string(evt.Method), "expired").Inc()
 		s.record(ctx, instanceID, domain.ConnEventPairingExpired, domain.ReasonNone,
 			map[string]any{"reason": string(evt.Expiry)})
 		s.publish(ctx, managed, events.TypePairingExpired, map[string]any{
@@ -61,6 +63,7 @@ func (s *Supervisor) handle(ctx context.Context, managed *managedSession, evt wa
 		managed.cancelPairing()
 		_ = s.publisher.ClearPairing(ctx, instanceID)
 		s.restoreStateAfterPairing(ctx, managed)
+		metrics.PairingAttempts.WithLabelValues(string(evt.Method), "failed").Inc()
 		s.record(ctx, instanceID, domain.ConnEventPairingFailed, domain.ReasonNone,
 			map[string]any{"reason": string(evt.Failure)})
 		s.publish(ctx, managed, events.TypePairingFailed, map[string]any{
@@ -81,6 +84,7 @@ func (s *Supervisor) handle(ctx context.Context, managed *managedSession, evt wa
 				slog.String("error", err.Error()))
 			return
 		}
+		metrics.SessionStateTransitions.WithLabelValues(string(domain.InstanceConnected), "").Inc()
 		s.record(ctx, instanceID, domain.ConnEventConnected, domain.ReasonNone, nil)
 		s.publish(ctx, managed, events.TypeConnected, map[string]any{
 			"connected_at": time.Now().UTC(),
@@ -173,6 +177,7 @@ func (s *Supervisor) handlePairSuccess(ctx context.Context, managed *managedSess
 		})
 	}
 
+	metrics.PairingAttempts.WithLabelValues(string(wa.MethodQR), "succeeded").Inc()
 	s.publish(ctx, managed, events.TypePairingSucceed, map[string]any{
 		"device": map[string]any{
 			"jid":          evt.Device.JID,
@@ -204,6 +209,20 @@ func (s *Supervisor) handleDisconnect(ctx context.Context, managed *managedSessi
 		if evt.Permanent {
 			state = domain.InstanceDisconnected
 		}
+	}
+
+	if evt.Reason == domain.ReasonSessionReplaced {
+		// This must never happen with the lease working: the same device
+		// credentials were opened somewhere else. It is an incident about
+		// exclusive ownership (principle III), not routine telemetry — the
+		// counter is expected to stay at zero forever.
+		metrics.StreamReplaced.Inc()
+		s.logger.Error("exclusive session ownership violated: stream replaced elsewhere",
+			slog.String("instance_id", instanceID.String()))
+	}
+	metrics.SessionStateTransitions.WithLabelValues(string(state), string(evt.Reason)).Inc()
+	if !evt.Permanent {
+		metrics.SessionReconnects.WithLabelValues("client").Inc()
 	}
 
 	if err := s.recordDisconnect(ctx, instanceID, state, evt.Reason, evt.BanExpiresAt); err != nil {

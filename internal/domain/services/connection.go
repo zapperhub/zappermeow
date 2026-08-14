@@ -245,6 +245,65 @@ func (s *ConnectionService) PairPhone(ctx context.Context, instanceID domain.ID,
 	}, nil
 }
 
+// ApplyTenantStatus projects a suspension or a reactivation onto the tenant's
+// sessions.
+//
+// Suspending writes `stopped` on every lease and asks the owners to drop the
+// sessions now; without the broadcast the numbers would stay online until the
+// next reconciliation. The per-instance intent is deliberately untouched, so
+// reactivating restores exactly what the tenant had running (FR-041, R12).
+func (s *ConnectionService) ApplyTenantStatus(ctx context.Context, tenantID domain.ID, status domain.TenantStatus) {
+	if status == domain.TenantActive {
+		if err := s.resumeTenant(ctx, tenantID); err != nil {
+			s.logger.Error("resuming tenant sessions failed",
+				slog.String("tenant_id", tenantID.String()),
+				slog.String("error", err.Error()))
+		}
+		return
+	}
+
+	if err := s.leases.SetTenantDesired(ctx, tenantID, lease.DesiredStopped); err != nil {
+		s.logger.Error("stopping tenant sessions failed",
+			slog.String("tenant_id", tenantID.String()),
+			slog.String("error", err.Error()))
+		return
+	}
+
+	instances, err := s.queries.ListInstanceIDsByTenant(ctx, tenantID)
+	if err != nil {
+		s.logger.Error("listing tenant instances failed",
+			slog.String("tenant_id", tenantID.String()),
+			slog.String("error", err.Error()))
+		return
+	}
+	for _, id := range instances {
+		if err := s.publisher.Stop(ctx, id); err != nil {
+			s.logger.Error("signalling stop failed",
+				slog.String("instance_id", id.String()),
+				slog.String("error", err.Error()))
+		}
+	}
+}
+
+// resumeTenant puts back exactly what the tenant had asked for: instances whose
+// intent is active go back to running, the rest stay down.
+func (s *ConnectionService) resumeTenant(ctx context.Context, tenantID domain.ID) error {
+	active, err := s.queries.ListActiveIntentInstancesByTenant(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("list instances to resume: %w", err)
+	}
+	for _, id := range active {
+		if err := s.leases.SetDesired(ctx, id, lease.DesiredRunning); err != nil {
+			return fmt.Errorf("resume lease: %w", err)
+		}
+		// A claim gets a worker moving now rather than at the next tick.
+		if err := s.publisher.Claim(ctx, id); err != nil {
+			return fmt.Errorf("claim on resume: %w", err)
+		}
+	}
+	return nil
+}
+
 // Terminate ends a session because its instance is being removed.
 //
 // It logs the device out so the companion device disappears from the customer's

@@ -123,6 +123,56 @@ func (q *Queries) GetInstanceConnectionByID(ctx context.Context, id uuid.UUID) (
 	return i, err
 }
 
+const listActiveIntentInstancesByTenant = `-- name: ListActiveIntentInstancesByTenant :many
+SELECT id FROM instances WHERE tenant_id = $1 AND connection_intent = 'active'
+`
+
+// Instances the tenant had asked to keep online. Reactivation restores these
+// and nothing else, so an instance the user had disconnected stays down.
+func (q *Queries) ListActiveIntentInstancesByTenant(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listActiveIntentInstancesByTenant, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInstanceIDsByTenant = `-- name: ListInstanceIDsByTenant :many
+SELECT id FROM instances WHERE tenant_id = $1
+`
+
+func (q *Queries) ListInstanceIDsByTenant(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listInstanceIDsByTenant, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInstancesSharingNumber = `-- name: ListInstancesSharingNumber :many
 SELECT id FROM instances
 WHERE tenant_id = $1 AND phone_number = $2 AND id <> $3

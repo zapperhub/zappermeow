@@ -46,6 +46,75 @@ var (
 		Help:      "Requests rejected by a rate limiter, by limiter scope.",
 	}, []string{"scope"})
 
+	// SessionsConnected reports how many WhatsApp sessions a worker holds.
+	// Labelled by worker rather than by instance: one series per instance would
+	// grow with the tenant base, which is what logs are for.
+	SessionsConnected = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "zappermeow",
+		Subsystem: "sessions",
+		Name:      "connected",
+		Help:      "WhatsApp sessions currently connected, by worker.",
+	}, []string{"worker_id"})
+
+	// SessionStateTransitions counts every move through the connection state
+	// machine, which is what makes an instability visible in aggregate.
+	SessionStateTransitions = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "zappermeow",
+		Subsystem: "sessions",
+		Name:      "state_transitions_total",
+		Help:      "Connection state transitions, by destination state and reason.",
+	}, []string{"to", "reason"})
+
+	// PairingAttempts counts pairing attempts by method and outcome.
+	PairingAttempts = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "zappermeow",
+		Subsystem: "sessions",
+		Name:      "pairing_attempts_total",
+		Help:      "Pairing attempts, by method and result.",
+	}, []string{"method", "result"})
+
+	// SessionReconnects counts reconnections, split by which layer drove them:
+	// the client's own retry or a lease being adopted elsewhere.
+	SessionReconnects = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "zappermeow",
+		Subsystem: "sessions",
+		Name:      "reconnects_total",
+		Help:      "Session reconnections, by layer.",
+	}, []string{"layer"})
+
+	// LeaseAcquisitions and LeaseLosses track ownership changes.
+	LeaseAcquisitions = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "zappermeow",
+		Subsystem: "leases",
+		Name:      "acquisitions_total",
+		Help:      "Session leases acquired, by worker.",
+	}, []string{"worker_id"})
+
+	LeaseLosses = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "zappermeow",
+		Subsystem: "leases",
+		Name:      "losses_total",
+		Help:      "Session leases lost to another worker, by worker.",
+	}, []string{"worker_id"})
+
+	// StreamReplaced must stay at zero. Any increment means the same device
+	// credentials were opened twice — a violation of exclusive session
+	// ownership (principle III), not a statistic to watch trend.
+	StreamReplaced = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "zappermeow",
+		Subsystem: "sessions",
+		Name:      "stream_replaced_total",
+		Help:      "Sessions replaced elsewhere. Non-zero means exclusive ownership was violated.",
+	})
+
+	// WebSocketClients reports how many event-channel listeners are attached.
+	WebSocketClients = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "zappermeow",
+		Subsystem: "websocket",
+		Name:      "clients",
+		Help:      "Currently connected event-channel clients.",
+	})
+
 	// APIKeysActive reports how many API keys are currently usable.
 	APIKeysActive = prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace: "zappermeow",
@@ -78,6 +147,14 @@ func init() {
 		RequestDuration,
 		LoginAttempts,
 		AccountLockouts,
+		SessionsConnected,
+		SessionStateTransitions,
+		PairingAttempts,
+		SessionReconnects,
+		LeaseAcquisitions,
+		LeaseLosses,
+		StreamReplaced,
+		WebSocketClients,
 		RateLimitRejections,
 		APIKeysActive,
 	)

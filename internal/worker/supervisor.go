@@ -11,6 +11,7 @@ import (
 	"github.com/zapperhub/zappermeow/internal/domain"
 	"github.com/zapperhub/zappermeow/internal/events"
 	"github.com/zapperhub/zappermeow/internal/lease"
+	"github.com/zapperhub/zappermeow/internal/metrics"
 	"github.com/zapperhub/zappermeow/internal/store"
 	"github.com/zapperhub/zappermeow/internal/wa"
 )
@@ -151,6 +152,8 @@ func (s *Supervisor) Adopt(ctx context.Context, instanceID domain.ID) error {
 		return err
 	}
 
+	metrics.LeaseAcquisitions.WithLabelValues(s.leases.WorkerID()).Inc()
+	metrics.SessionsConnected.WithLabelValues(s.leases.WorkerID()).Set(float64(s.Count()))
 	s.record(ctx, instanceID, domain.ConnEventLeaseAcquired, domain.ReasonNone, nil)
 	return nil
 }
@@ -281,6 +284,9 @@ func (s *Supervisor) Drop(ctx context.Context, instanceID domain.ID) {
 	s.logger.Warn("dropping session: lease no longer held",
 		slog.String("instance_id", instanceID.String()))
 	s.stop(instanceID)
+	metrics.LeaseLosses.WithLabelValues(s.leases.WorkerID()).Inc()
+	metrics.SessionsConnected.WithLabelValues(s.leases.WorkerID()).Set(float64(s.Count()))
+	metrics.SessionReconnects.WithLabelValues("lease").Inc()
 	s.record(ctx, instanceID, domain.ConnEventLeaseLost, domain.ReasonWorkerLost, nil)
 }
 

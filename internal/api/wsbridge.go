@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/zapperhub/zappermeow/internal/api/ws"
 	"github.com/zapperhub/zappermeow/internal/domain"
 	"github.com/zapperhub/zappermeow/internal/events"
@@ -72,7 +70,7 @@ func (a *wsAuthenticator) authorizeToken(ctx context.Context, raw string, instan
 	// Scoping by tenant in SQL is what makes another tenant's instance
 	// indistinguishable from one that never existed.
 	if _, err := a.queries.GetInstanceByIDAndTenant(ctx, store.GetInstanceByIDAndTenantParams{
-		ID:       uuid.UUID(instanceID),
+		ID:       instanceID,
 		TenantID: *claims.TenantID,
 	}); err != nil {
 		return ws.Principal{}, ws.ErrNotFound
@@ -96,7 +94,7 @@ type wsSnapshotter struct {
 // what lets the client drop the events the snapshot already reflects: the
 // handler subscribes before reading this, so an overlap is expected.
 func (s *wsSnapshotter) Snapshot(ctx context.Context, instanceID domain.ID) (events.Envelope, error) {
-	row, err := s.queries.GetInstanceConnectionByID(ctx, uuid.UUID(instanceID))
+	row, err := s.queries.GetInstanceConnectionByID(ctx, instanceID)
 	if err != nil {
 		return events.Envelope{}, fmt.Errorf("load instance: %w", err)
 	}

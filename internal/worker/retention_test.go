@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -22,7 +21,7 @@ func TestRetentionRemovesOnlyExpiredEvents(t *testing.T) {
 		_, err := h.infra.Pool.Exec(h.ctx,
 			`INSERT INTO connection_events (instance_id, type, occurred_at)
 			 VALUES ($1, 'connected', now() - $2::interval)`,
-			uuid.UUID(h.instanceID), age)
+			h.instanceID, age)
 		require.NoError(t, err)
 	}
 
@@ -45,7 +44,7 @@ func TestRetentionRunsOnceAcrossWorkers(t *testing.T) {
 		_, err := h.infra.Pool.Exec(h.ctx,
 			`INSERT INTO connection_events (instance_id, type, occurred_at)
 			 VALUES ($1, 'connected', now() - interval '60 days')`,
-			uuid.UUID(h.instanceID))
+			h.instanceID)
 		require.NoError(t, err)
 	}
 
@@ -74,7 +73,7 @@ func TestRetentionSkipsWhenTheLockIsHeld(t *testing.T) {
 	_, err := h.infra.Pool.Exec(h.ctx,
 		`INSERT INTO connection_events (instance_id, type, occurred_at)
 		 VALUES ($1, 'connected', now() - interval '60 days')`,
-		uuid.UUID(h.instanceID))
+		h.instanceID)
 	require.NoError(t, err)
 
 	// Hold the same advisory lock on a dedicated connection, standing in for a

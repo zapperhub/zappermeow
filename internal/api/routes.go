@@ -112,8 +112,10 @@ func (s *Server) RegisterRoutes(deps RouteDeps) {
 		connectionHandler.Register(connectionGroup)
 		connectionHandler.RegisterQueries(connectionGroup)
 
-		// Deleting an instance must not leave a live session behind.
+		// Deleting an instance must not leave a live session behind, and
+		// suspending a tenant must actually take its numbers offline.
 		instances.WithSessions(connections)
+		tenants.WithSessions(connections)
 
 		// The event channel is mounted straight on chi: a WebSocket upgrade is
 		// not a JSON response and has no place among the OpenAPI response

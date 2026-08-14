@@ -23,6 +23,7 @@ type TenantService struct {
 	pool     *pgxpool.Pool
 	queries  *store.Queries
 	recorder *EventRecorder
+	sessions TenantSessionProjector
 }
 
 // NewTenantService builds the tenant use cases.
@@ -270,6 +271,13 @@ func (s *TenantService) SetStatus(ctx context.Context, in SetStatusInput) (domai
 	if err := tx.Commit(ctx); err != nil {
 		return domain.Tenant{}, domain.ErrInternal(err)
 	}
+
+	// Projecting the decision onto the sessions happens after the commit: the
+	// tenant status is the authority, and a failure to reach the fleet must not
+	// roll back a suspension that is already in force for authentication.
+	if s.sessions != nil {
+		s.sessions.ApplyTenantStatus(ctx, tenant.ID, tenant.Status)
+	}
 	return tenant, nil
 }
 
@@ -287,6 +295,19 @@ type DeleteTenantInput struct {
 // Delete permanently removes a tenant with its users, instances and keys.
 // The removal is irreversible and cascades through foreign keys in a single
 // transaction, so nothing of the tenant can survive it (FR-007).
+// TenantSessionProjector applies a tenant-wide decision onto its sessions.
+// Optional: a deployment with no worker fleet has no session to stop.
+type TenantSessionProjector interface {
+	ApplyTenantStatus(ctx context.Context, tenantID domain.ID, status domain.TenantStatus)
+}
+
+// WithSessions gives the service a way to stop and resume sessions when a
+// tenant is suspended or reactivated.
+func (s *TenantService) WithSessions(projector TenantSessionProjector) *TenantService {
+	s.sessions = projector
+	return s
+}
+
 func (s *TenantService) Delete(ctx context.Context, in DeleteTenantInput) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

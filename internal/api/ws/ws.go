@@ -18,6 +18,7 @@ import (
 
 	"github.com/zapperhub/zappermeow/internal/domain"
 	"github.com/zapperhub/zappermeow/internal/events"
+	"github.com/zapperhub/zappermeow/internal/metrics"
 )
 
 // Subprotocol is required on every connection. Versioning the channel here lets
@@ -156,8 +157,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request, instanceID d
 		return
 	}
 
+	metrics.WebSocketClients.Inc()
 	logger.Info("websocket opened")
 	defer func() {
+		metrics.WebSocketClients.Dec()
 		logger.Info("websocket closed", slog.Duration("duration", time.Since(start)))
 	}()
 
