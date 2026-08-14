@@ -93,6 +93,9 @@ func bootApplication(t *testing.T, infra *testutil.Infra, mutators ...func(*conf
 		LeaseExpiry:               30 * time.Second,
 		ReconcileInterval:         15 * time.Second,
 		ConnectionEventsRetention: 720 * time.Hour,
+		// No worker fleet runs in these tests, so commands that need one give
+		// up quickly instead of paying the production grace period.
+		ClaimWait: 150 * time.Millisecond,
 	}
 	for _, mutate := range mutators {
 		mutate(cfg)

@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/zapperhub/zappermeow/internal/domain"
 	"github.com/zapperhub/zappermeow/internal/events"
 	"github.com/zapperhub/zappermeow/internal/lease"
@@ -70,6 +68,13 @@ func (s *Supervisor) handle(ctx context.Context, managed *managedSession, evt wa
 		})
 
 	case wa.KindConnected:
+		// The pairing success and this event arrive on different channels —
+		// the QR stream and the client's own event handler — and nothing
+		// orders them. If this one lands first, the instance would be
+		// "connected" with no device recorded until the other arrived, and a
+		// worker restarting in that window would treat it as unpaired.
+		s.ensureDeviceIdentity(ctx, managed)
+
 		if err := s.setState(ctx, instanceID, domain.InstanceConnected); err != nil {
 			s.logger.Error("persisting connected state failed",
 				slog.String("instance_id", instanceID.String()),
@@ -119,7 +124,7 @@ func (s *Supervisor) handlePairSuccess(ctx context.Context, managed *managedSess
 		return
 	}
 
-	previous, err := s.queries.GetInstanceConnectionByID(ctx, uuid.UUID(instanceID))
+	previous, err := s.queries.GetInstanceConnectionByID(ctx, instanceID)
 	if err != nil {
 		s.logger.Error("loading instance after pairing failed",
 			slog.String("instance_id", instanceID.String()),
@@ -140,7 +145,7 @@ func (s *Supervisor) handlePairSuccess(ctx context.Context, managed *managedSess
 	numberChanged := previousPhone != "" && previousPhone != evt.Device.PhoneNumber
 
 	err = s.queries.SetDeviceIdentity(ctx, store.SetDeviceIdentityParams{
-		ID:           uuid.UUID(instanceID),
+		ID:           instanceID,
 		WaJid:        ptr(evt.Device.JID),
 		WaLid:        ptr(evt.Device.LID),
 		PhoneNumber:  ptr(evt.Device.PhoneNumber),
@@ -208,6 +213,19 @@ func (s *Supervisor) handleDisconnect(ctx context.Context, managed *managedSessi
 		return
 	}
 
+	if evt.Reason == domain.ReasonLoggedOutFromPhone {
+		// The library deletes the local material when the server says the
+		// device is gone. Leaving the JID on the row would point the next
+		// pairing at material that no longer exists, and the instance could
+		// never come back. The number stays on the row for context; the trail
+		// keeps the full history either way.
+		if err := s.queries.ClearDeviceMaterial(ctx, instanceID); err != nil {
+			s.logger.Error("clearing device material after remote logout failed",
+				slog.String("instance_id", instanceID.String()),
+				slog.String("error", err.Error()))
+		}
+	}
+
 	detail := map[string]any{}
 	if evt.BanExpiresAt != nil {
 		detail["expires_at"] = evt.BanExpiresAt.UTC()
@@ -246,7 +264,7 @@ func (s *Supervisor) handleDisconnect(ctx context.Context, managed *managedSessi
 // lastPairedPhone reads the most recent number from the trail. A miss is not an
 // error: a first pairing has nothing before it.
 func (s *Supervisor) lastPairedPhone(ctx context.Context, instanceID domain.ID) string {
-	raw, err := s.queries.LastPairedPhone(ctx, uuid.UUID(instanceID))
+	raw, err := s.queries.LastPairedPhone(ctx, instanceID)
 	if err != nil {
 		if !store.IsNoRows(err) {
 			s.logger.Error("reading last paired number failed",
@@ -257,6 +275,35 @@ func (s *Supervisor) lastPairedPhone(ctx context.Context, instanceID domain.ID) 
 	}
 	phone, _ := raw.(string)
 	return phone
+}
+
+// ensureDeviceIdentity persists what the session already knows about its device
+// when the row has nothing yet. It is a no-op on the common path, where the
+// pairing handler got there first.
+func (s *Supervisor) ensureDeviceIdentity(ctx context.Context, managed *managedSession) {
+	status := managed.session.Status()
+	if status.Device == nil || status.Device.JID == "" {
+		return
+	}
+
+	row, err := s.queries.GetInstanceConnectionByID(ctx, managed.instanceID)
+	if err != nil || (row.WaJid != nil && *row.WaJid != "") {
+		return
+	}
+
+	if err := s.queries.SetDeviceIdentity(ctx, store.SetDeviceIdentityParams{
+		ID:           managed.instanceID,
+		WaJid:        ptr(status.Device.JID),
+		WaLid:        ptr(status.Device.LID),
+		PhoneNumber:  ptr(status.Device.PhoneNumber),
+		PushName:     ptr(status.Device.PushName),
+		Platform:     ptr(status.Device.Platform),
+		BusinessName: ptr(status.Device.BusinessName),
+	}); err != nil {
+		s.logger.Error("persisting device identity on connect failed",
+			slog.String("instance_id", managed.instanceID.String()),
+			slog.String("error", err.Error()))
+	}
 }
 
 // restoreStateAfterPairing puts the instance back where it was before the
@@ -286,7 +333,7 @@ func (s *Supervisor) publishPairingEnded(ctx context.Context, managed *managedSe
 
 func (s *Supervisor) setState(ctx context.Context, instanceID domain.ID, state domain.InstanceState) error {
 	err := s.queries.SetConnectionState(ctx, store.SetConnectionStateParams{
-		ID:              uuid.UUID(instanceID),
+		ID:              instanceID,
 		ConnectionState: string(state),
 	})
 	if err != nil {
@@ -303,7 +350,7 @@ func (s *Supervisor) recordDisconnect(
 	banExpiresAt *time.Time,
 ) error {
 	return s.queries.RecordDisconnect(ctx, store.RecordDisconnectParams{
-		ID:                   uuid.UUID(instanceID),
+		ID:                   instanceID,
 		ConnectionState:      string(state),
 		LastDisconnectReason: ptr(string(reason)),
 		BanExpiresAt:         banExpiresAt,
@@ -320,7 +367,7 @@ func (s *Supervisor) record(
 	detail map[string]any,
 ) {
 	params := store.AppendConnectionEventParams{
-		InstanceID: uuid.UUID(instanceID),
+		InstanceID: instanceID,
 		Type:       string(eventType),
 	}
 	if reason != domain.ReasonNone {

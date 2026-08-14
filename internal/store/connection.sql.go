@@ -34,6 +34,28 @@ func (q *Queries) ClearDeviceIdentity(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const clearDeviceMaterial = `-- name: ClearDeviceMaterial :exec
+UPDATE instances
+SET wa_jid = NULL,
+    wa_lid = NULL,
+    push_name = NULL,
+    platform = NULL,
+    business_name = NULL,
+    paired_at = NULL,
+    connected_at = NULL,
+    updated_at = now()
+WHERE id = $1
+`
+
+// Drops the device identity while leaving the connection state alone.
+// A remote logout destroys the material on both sides, so the row must stop
+// pointing at it — otherwise the next connect loads nothing and the instance
+// can never be paired again.
+func (q *Queries) ClearDeviceMaterial(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearDeviceMaterial, id)
+	return err
+}
+
 const getInstanceConnection = `-- name: GetInstanceConnection :one
 SELECT id, tenant_id, name, connection_state, created_at, updated_at, connection_intent, wa_jid, wa_lid, phone_number, push_name, platform, business_name, paired_at, connected_at, last_disconnect_at, last_disconnect_reason, ban_expires_at FROM instances WHERE id = $1 AND tenant_id = $2
 `

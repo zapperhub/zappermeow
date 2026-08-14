@@ -6,10 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -32,6 +33,10 @@ type ConnectionService struct {
 	leases    *lease.Manager
 	sessions  *sessionclient.Client
 	publisher *events.Publisher
+	logger    *slog.Logger
+	// claimWait bounds how long a command waits for a worker to take the
+	// session before reporting no capacity.
+	claimWait time.Duration
 }
 
 // NewConnectionService builds the service.
@@ -40,8 +45,17 @@ func NewConnectionService(
 	leases *lease.Manager,
 	sessions *sessionclient.Client,
 	publisher *events.Publisher,
+	logger *slog.Logger,
+	claimWait time.Duration,
 ) *ConnectionService {
-	return &ConnectionService{queries: queries, leases: leases, sessions: sessions, publisher: publisher}
+	return &ConnectionService{
+		queries:   queries,
+		leases:    leases,
+		sessions:  sessions,
+		publisher: publisher,
+		logger:    logger,
+		claimWait: claimWait,
+	}
 }
 
 // ConnectResult is what the API reports back after a connect command.
@@ -66,7 +80,7 @@ func (s *ConnectionService) Connect(ctx context.Context, instanceID domain.ID) (
 	// after an invalidation: without it, reconciliation keeps skipping the
 	// instance and an explicit command would do nothing (FR-031).
 	if _, err := s.queries.SetConnectionIntent(ctx, store.SetConnectionIntentParams{
-		ID:               uuid.UUID(instanceID),
+		ID:               instanceID,
 		ConnectionIntent: string(domain.IntentActive),
 		ClearReason:      true,
 	}); err != nil {
@@ -80,18 +94,18 @@ func (s *ConnectionService) Connect(ctx context.Context, instanceID domain.ID) (
 	resp, err := s.sessions.Connect(ctx, instanceID)
 	if err != nil {
 		if errors.Is(err, sessionclient.ErrNoOwner) {
-			// Nobody holds the session yet. Waking the fleet over pub/sub is
-			// what keeps the first QR inside its five-second budget; the
-			// reconciliation tick is only the safety net.
-			if pubErr := s.publisher.Claim(ctx, instanceID); pubErr != nil {
-				return ConnectResult{}, domain.ErrInternal(pubErr)
+			// Nobody holds the session yet. Waking the fleet is only half the
+			// job: adopting a lease does not start a pairing window, so the
+			// command has to be delivered once a worker has the session.
+			// Returning here would leave the tenant watching an empty channel
+			// for a QR nobody was ever asked to produce.
+			resp, err = s.claimAndRetryConnect(ctx, instanceID)
+			if err != nil {
+				return ConnectResult{}, err
 			}
-			return ConnectResult{
-				State:  domain.InstanceConnecting,
-				Intent: domain.IntentActive,
-			}, nil
+		} else {
+			return ConnectResult{}, translateSessionError(err)
 		}
-		return ConnectResult{}, translateSessionError(err)
 	}
 
 	result := ConnectResult{
@@ -112,7 +126,7 @@ func (s *ConnectionService) Disconnect(ctx context.Context, instanceID domain.ID
 		return "", domain.ErrInternal(err)
 	}
 	if _, err := s.queries.SetConnectionIntent(ctx, store.SetConnectionIntentParams{
-		ID:               uuid.UUID(instanceID),
+		ID:               instanceID,
 		ConnectionIntent: string(domain.IntentStopped),
 	}); err != nil {
 		return "", domain.ErrInternal(err)
@@ -146,7 +160,7 @@ type LogoutResult struct {
 
 // Logout ends the session on WhatsApp and deletes the local material.
 func (s *ConnectionService) Logout(ctx context.Context, instanceID domain.ID) (LogoutResult, error) {
-	instance, err := s.queries.GetInstanceConnectionByID(ctx, uuid.UUID(instanceID))
+	instance, err := s.queries.GetInstanceConnectionByID(ctx, instanceID)
 	if err != nil {
 		if store.IsNoRows(err) {
 			return LogoutResult{}, domain.ErrNotFound()
@@ -159,7 +173,7 @@ func (s *ConnectionService) Logout(ctx context.Context, instanceID domain.ID) (L
 	}
 
 	if _, err := s.queries.SetConnectionIntent(ctx, store.SetConnectionIntentParams{
-		ID:               uuid.UUID(instanceID),
+		ID:               instanceID,
 		ConnectionIntent: string(domain.IntentStopped),
 	}); err != nil {
 		return LogoutResult{}, domain.ErrInternal(err)
@@ -170,7 +184,7 @@ func (s *ConnectionService) Logout(ctx context.Context, instanceID domain.ID) (L
 		if errors.Is(err, sessionclient.ErrNoOwner) {
 			// Offline logout: no worker holds the session, so the material is
 			// dropped here and the device stays listed on the handset.
-			if err := s.queries.ClearDeviceIdentity(ctx, uuid.UUID(instanceID)); err != nil {
+			if err := s.queries.ClearDeviceIdentity(ctx, instanceID); err != nil {
 				return LogoutResult{}, domain.ErrInternal(err)
 			}
 			_ = s.leases.SetDesired(ctx, instanceID, lease.DesiredStopped)
@@ -198,7 +212,7 @@ func (s *ConnectionService) PairPhone(ctx context.Context, instanceID domain.ID,
 		return PairPhoneResult{}, domain.ErrInternal(err)
 	}
 	if _, err := s.queries.SetConnectionIntent(ctx, store.SetConnectionIntentParams{
-		ID:               uuid.UUID(instanceID),
+		ID:               instanceID,
 		ConnectionIntent: string(domain.IntentActive),
 		ClearReason:      true,
 	}); err != nil {
@@ -211,15 +225,18 @@ func (s *ConnectionService) PairPhone(ctx context.Context, instanceID domain.ID,
 	resp, err := s.sessions.PairPhone(ctx, instanceID, phoneNumber, replaceActive)
 	if err != nil {
 		if errors.Is(err, sessionclient.ErrNoOwner) {
-			// Unlike connect, this command has to reach a worker: it returns a
-			// code the caller needs right now, so there is nothing useful to
-			// answer while the fleet is still claiming the session.
-			if pubErr := s.publisher.Claim(ctx, instanceID); pubErr != nil {
-				return PairPhoneResult{}, domain.ErrInternal(pubErr)
+			// Unlike connect, this command cannot answer 202 and finish later:
+			// it must return a code the caller types on the handset. So it wakes
+			// the fleet and waits for someone to take the session — an instance
+			// that was never connected has no owner yet, and giving up here
+			// would make the very first pairing attempt fail every time.
+			resp, err = s.claimAndRetryPairPhone(ctx, instanceID, phoneNumber, replaceActive)
+			if err != nil {
+				return PairPhoneResult{}, err
 			}
-			return PairPhoneResult{}, domain.ErrSessionUnavailable()
+		} else {
+			return PairPhoneResult{}, translateSessionError(err)
 		}
-		return PairPhoneResult{}, translateSessionError(err)
 	}
 
 	return PairPhoneResult{
@@ -249,11 +266,73 @@ func (s *ConnectionService) Terminate(ctx context.Context, instanceID domain.ID)
 	return nil
 }
 
+// claimAndRetryConnect wakes the fleet and delivers the command once a worker
+// owns the session.
+func (s *ConnectionService) claimAndRetryConnect(ctx context.Context, instanceID domain.ID) (*sessionv1.ConnectResponse, error) {
+	if err := s.publisher.Claim(ctx, instanceID); err != nil {
+		return nil, domain.ErrInternal(err)
+	}
+
+	deadline := time.Now().Add(s.claimWait)
+	for {
+		resp, err := s.sessions.Connect(ctx, instanceID)
+		if err == nil {
+			return resp, nil
+		}
+		if !errors.Is(err, sessionclient.ErrNoOwner) {
+			return nil, translateSessionError(err)
+		}
+		if time.Now().After(deadline) {
+			return nil, domain.ErrSessionUnavailable()
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, domain.ErrSessionUnavailable()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+// claimAndRetryPairPhone wakes the fleet and retries once a worker has the
+// session. Failing to find one within the window is the honest
+// SESSION_UNAVAILABLE: there really is no capacity right now.
+func (s *ConnectionService) claimAndRetryPairPhone(
+	ctx context.Context,
+	instanceID domain.ID,
+	phoneNumber string,
+	replaceActive bool,
+) (*sessionv1.PairPhoneResponse, error) {
+	if err := s.publisher.Claim(ctx, instanceID); err != nil {
+		return nil, domain.ErrInternal(err)
+	}
+
+	deadline := time.Now().Add(s.claimWait)
+	for {
+		resp, err := s.sessions.PairPhone(ctx, instanceID, phoneNumber, replaceActive)
+		if err == nil {
+			return resp, nil
+		}
+		if !errors.Is(err, sessionclient.ErrNoOwner) {
+			return nil, translateSessionError(err)
+		}
+		if time.Now().After(deadline) {
+			return nil, domain.ErrSessionUnavailable()
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil, domain.ErrSessionUnavailable()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
 // setStateDirect writes a state the API itself decided, used when no worker is
 // involved.
 func (s *ConnectionService) setStateDirect(ctx context.Context, instanceID domain.ID, state domain.InstanceState) error {
 	err := s.queries.SetConnectionState(ctx, store.SetConnectionStateParams{
-		ID:              uuid.UUID(instanceID),
+		ID:              instanceID,
 		ConnectionState: string(state),
 	})
 	if err != nil {
@@ -268,6 +347,17 @@ func translateSessionError(err error) error {
 	st, ok := status.FromError(err)
 	if !ok {
 		return domain.ErrInternal(err)
+	}
+
+	// The detail string carries the reason; the code alone cannot tell an
+	// upstream failure from a platform one.
+	switch {
+	case strings.HasPrefix(st.Message(), "UPSTREAM_FAILURE"):
+		return domain.ErrWhatsAppUnavailable()
+	case st.Message() == "UNKNOWN_INSTANCE":
+		// The lease says this worker owns the session, but it has none in
+		// memory — a stale ownership record, not a missing worker.
+		return domain.ErrSessionNotRunning()
 	}
 
 	switch st.Message() {
@@ -332,8 +422,8 @@ type ConnectionStatus struct {
 // Status reads the connection state of an instance.
 func (s *ConnectionService) Status(ctx context.Context, tenantID, instanceID domain.ID) (ConnectionStatus, error) {
 	row, err := s.queries.GetInstanceConnection(ctx, store.GetInstanceConnectionParams{
-		ID:       uuid.UUID(instanceID),
-		TenantID: uuid.UUID(tenantID),
+		ID:       instanceID,
+		TenantID: tenantID,
 	})
 	if err != nil {
 		if store.IsNoRows(err) {
@@ -369,16 +459,14 @@ func (s *ConnectionService) Status(ctx context.Context, tenantID, instanceID dom
 
 	if row.PhoneNumber != nil && *row.PhoneNumber != "" {
 		siblings, err := s.queries.ListInstancesSharingNumber(ctx, store.ListInstancesSharingNumberParams{
-			TenantID:    uuid.UUID(tenantID),
+			TenantID:    tenantID,
 			PhoneNumber: row.PhoneNumber,
-			ID:          uuid.UUID(instanceID),
+			ID:          instanceID,
 		})
 		if err != nil {
 			return ConnectionStatus{}, domain.ErrInternal(err)
 		}
-		for _, id := range siblings {
-			status.SharesNumberWith = append(status.SharesNumberWith, domain.ID(id))
-		}
+		status.SharesNumberWith = append(status.SharesNumberWith, siblings...)
 	}
 
 	return status, nil
@@ -401,8 +489,8 @@ func (s *ConnectionService) Events(ctx context.Context, tenantID, instanceID dom
 	// Ownership is checked before anything is read: another tenant's trail must
 	// be as invisible as one that never existed.
 	if _, err := s.queries.GetInstanceConnection(ctx, store.GetInstanceConnectionParams{
-		ID:       uuid.UUID(instanceID),
-		TenantID: uuid.UUID(tenantID),
+		ID:       instanceID,
+		TenantID: tenantID,
 	}); err != nil {
 		if store.IsNoRows(err) {
 			return EventPage{}, domain.ErrNotFound()
@@ -418,7 +506,7 @@ func (s *ConnectionService) Events(ctx context.Context, tenantID, instanceID dom
 	}
 
 	rows, err := s.queries.ListConnectionEvents(ctx, store.ListConnectionEventsParams{
-		InstanceID: uuid.UUID(instanceID),
+		InstanceID: instanceID,
 		BeforeID:   before,
 		Types:      types,
 		MaxRows:    limit,
@@ -431,7 +519,7 @@ func (s *ConnectionService) Events(ctx context.Context, tenantID, instanceID dom
 	for _, row := range rows {
 		event := domain.ConnectionEvent{
 			ID:         row.ID,
-			InstanceID: domain.ID(row.InstanceID),
+			InstanceID: row.InstanceID,
 			Type:       domain.ConnectionEventType(row.Type),
 			OccurredAt: row.OccurredAt,
 		}

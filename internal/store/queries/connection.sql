@@ -73,3 +73,19 @@ SELECT * FROM instances WHERE id = $1;
 SELECT id FROM instances
 WHERE tenant_id = $1 AND phone_number = $2 AND id <> $3
 ORDER BY created_at;
+
+-- name: ClearDeviceMaterial :exec
+-- Drops the device identity while leaving the connection state alone.
+-- A remote logout destroys the material on both sides, so the row must stop
+-- pointing at it — otherwise the next connect loads nothing and the instance
+-- can never be paired again.
+UPDATE instances
+SET wa_jid = NULL,
+    wa_lid = NULL,
+    push_name = NULL,
+    platform = NULL,
+    business_name = NULL,
+    paired_at = NULL,
+    connected_at = NULL,
+    updated_at = now()
+WHERE id = $1;

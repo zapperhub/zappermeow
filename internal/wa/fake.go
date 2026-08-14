@@ -33,6 +33,12 @@ type FakeSession struct {
 	pairingOpen bool
 	closed      bool
 
+	// ConnectCtx records the context the caller opened the connection with.
+	// The real client binds the socket's lifetime to it, so a caller that
+	// passes a short-lived context silently kills the session; the only way to
+	// catch that in a test is to keep the context and check it later.
+	ConnectCtx context.Context
+
 	// ConnectErr, if set, makes Connect fail — used to exercise the retry paths.
 	ConnectErr error
 	// LogoutRemoteFails simulates a logout that cannot reach the server, which
@@ -110,6 +116,8 @@ func (f *FakeSession) PairPhone(ctx context.Context, phoneNumber string) (string
 func (f *FakeSession) Connect(ctx context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	f.ConnectCtx = ctx
 
 	if f.closed {
 		return ErrSessionClosed

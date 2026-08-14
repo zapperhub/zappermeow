@@ -3,23 +3,13 @@ package api_test
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zapperhub/zappermeow/internal/config"
 )
-
-// connectData is the payload of a connect command.
-type connectData struct {
-	InstanceID string `json:"instance_id"`
-	State      string `json:"state"`
-	Intent     string `json:"intent"`
-	Pairing    *struct {
-		Method    string  `json:"method"`
-		ExpiresAt *string `json:"expires_at"`
-	} `json:"pairing"`
-}
 
 type lifecycleData struct {
 	InstanceID string `json:"instance_id"`
@@ -53,29 +43,36 @@ func TestConnectAcceptsATenantToken(t *testing.T) {
 	f := newFixture(t)
 	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
 
-	var data connectData
+	// No worker runs in these tests, so a credential that passes reaches the
+	// session layer and gets an honest "no capacity". A credential that failed
+	// would never get that far — it would be 401, 403 or 404.
 	f.do(request{
 		method: http.MethodPost,
 		path:   "/instances/" + setup.instanceID + "/connect",
 		token:  setup.tenant.token,
-	}).data(http.StatusAccepted, &data)
+	}).problem(http.StatusServiceUnavailable, "SESSION_UNAVAILABLE")
 
-	assert.Equal(t, setup.instanceID, data.InstanceID)
-	assert.Equal(t, "active", data.Intent, "connect records the intent to be online")
+	// The intent is recorded regardless, so a worker coming up later adopts it.
+	var intent string
+	require.NoError(t, f.infra.Pool.QueryRow(t.Context(),
+		`SELECT connection_intent FROM instances WHERE id = $1`, setup.instanceID).Scan(&intent))
+	assert.Equal(t, "active", intent, "connect records the intent to be online")
 }
 
 func TestConnectAcceptsAnInstanceAPIKey(t *testing.T) {
 	f := newFixture(t)
 	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
 
-	var data connectData
 	f.do(request{
 		method: http.MethodPost,
 		path:   "/instances/" + setup.instanceID + "/connect",
 		apiKey: setup.key,
-	}).data(http.StatusAccepted, &data)
+	}).problem(http.StatusServiceUnavailable, "SESSION_UNAVAILABLE")
 
-	assert.Equal(t, "active", data.Intent,
+	var intent string
+	require.NoError(t, f.infra.Pool.QueryRow(t.Context(),
+		`SELECT connection_intent FROM instances WHERE id = $1`, setup.instanceID).Scan(&intent))
+	assert.Equal(t, "active", intent,
 		"an integration must bring a number online with no human logged in")
 }
 
@@ -270,12 +267,12 @@ func TestDeleteInstanceRemovesItsConnectionTrail(t *testing.T) {
 	f := newFixture(t)
 	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
 
-	// A connect leaves a lease row and, once a worker acts, trail entries.
+	// A connect leaves a lease row behind even without a fleet to serve it.
 	f.do(request{
 		method: http.MethodPost,
 		path:   "/instances/" + setup.instanceID + "/connect",
 		token:  setup.tenant.token,
-	}).data(http.StatusAccepted, nil)
+	})
 
 	_, err := f.infra.Pool.Exec(t.Context(),
 		`INSERT INTO connection_events (instance_id, type) VALUES ($1, 'connected')`, setup.instanceID)
@@ -531,4 +528,170 @@ func TestConnectionTrailRefusesAnotherTenant(t *testing.T) {
 		path:   "/instances/" + owner.instanceID + "/connection/events",
 		token:  intruder.token,
 	}).problem(http.StatusNotFound, "RESOURCE_NOT_FOUND")
+}
+
+// FR-041: suspending a tenant must actually take its numbers offline, and
+// reactivating must put back exactly what the tenant had asked for — not
+// everything, and not nothing.
+func TestSuspensionStopsSessionsAndReactivationRestoresIntent(t *testing.T) {
+	f := newFixture(t)
+	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
+	parked := f.createInstance(setup.tenant.token, "vendas-02")
+
+	// One instance the tenant wants online, one it deliberately stopped.
+	f.do(request{
+		method: http.MethodPost,
+		path:   "/instances/" + setup.instanceID + "/connect",
+		token:  setup.tenant.token,
+	})
+
+	f.do(request{
+		method: http.MethodPost,
+		path:   "/instances/" + parked.ID + "/disconnect",
+		token:  setup.tenant.token,
+	}).data(http.StatusAccepted, nil)
+
+	desired := func(instanceID string) string {
+		var state string
+		require.NoError(t, f.infra.Pool.QueryRow(t.Context(),
+			`SELECT desired_state FROM session_leases WHERE instance_id = $1`, instanceID).Scan(&state))
+		return state
+	}
+	require.Equal(t, "running", desired(setup.instanceID))
+	require.Equal(t, "stopped", desired(parked.ID))
+
+	f.do(request{
+		method: http.MethodPost,
+		path:   "/admin/tenants/" + setup.tenant.tenant.ID + "/suspend",
+		token:  f.platformToken(),
+	}).data(http.StatusOK, nil)
+
+	assert.Equal(t, "stopped", desired(setup.instanceID), "suspension takes every number offline")
+	assert.Equal(t, "stopped", desired(parked.ID))
+
+	// The user's intent survives the suspension, which is what makes the
+	// reactivation able to distinguish the two instances.
+	var intent string
+	require.NoError(t, f.infra.Pool.QueryRow(t.Context(),
+		`SELECT connection_intent FROM instances WHERE id = $1`, setup.instanceID).Scan(&intent))
+	assert.Equal(t, "active", intent)
+
+	f.do(request{
+		method: http.MethodPost,
+		path:   "/admin/tenants/" + setup.tenant.tenant.ID + "/activate",
+		token:  f.platformToken(),
+	}).data(http.StatusOK, nil)
+
+	assert.Equal(t, "running", desired(setup.instanceID), "reactivation restores what was running")
+	assert.Equal(t, "stopped", desired(parked.ID), "an instance the user had stopped stays stopped")
+}
+
+// US7: the API key must reach every connection route with the same behaviour
+// as an admin token — that is what lets an integration provision and monitor a
+// number without a human logged in (FR-039).
+func TestEveryConnectionRouteAcceptsBothCredentials(t *testing.T) {
+	routes := []struct {
+		name   string
+		method string
+		suffix string
+		body   any
+		want   int
+	}{
+		// Connect needs a worker to deliver the command to; with no fleet the
+		// honest answer is no capacity, and both credentials must get there.
+		{"connect", http.MethodPost, "/connect", nil, http.StatusServiceUnavailable},
+		{"disconnect", http.MethodPost, "/disconnect", nil, http.StatusAccepted},
+		{"logout", http.MethodPost, "/logout", nil, http.StatusAccepted},
+		{"status", http.MethodGet, "/connection", nil, http.StatusOK},
+		{"trail", http.MethodGet, "/connection/events", nil, http.StatusOK},
+	}
+
+	for _, route := range routes {
+		t.Run(route.name, func(t *testing.T) {
+			f := newFixture(t)
+			setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
+
+			withToken := f.do(request{
+				method: route.method,
+				path:   "/instances/" + setup.instanceID + route.suffix,
+				token:  setup.tenant.token,
+				body:   route.body,
+			})
+			withKey := f.do(request{
+				method: route.method,
+				path:   "/instances/" + setup.instanceID + route.suffix,
+				apiKey: setup.key,
+				body:   route.body,
+			})
+
+			assert.Equal(t, route.want, withToken.Status, "token; body: %s", withToken.Body)
+			assert.Equal(t, route.want, withKey.Status, "api key; body: %s", withKey.Body)
+		})
+	}
+}
+
+// Revocation takes effect on the very next request, on every route.
+func TestRevokedKeyLosesEveryConnectionRoute(t *testing.T) {
+	f := newFixture(t)
+	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
+
+	var keys struct {
+		Keys []struct {
+			ID string `json:"id"`
+		} `json:"keys"`
+	}
+	f.do(request{
+		method: http.MethodGet,
+		path:   "/instances/" + setup.instanceID + "/keys",
+		token:  setup.tenant.token,
+	}).data(http.StatusOK, &keys)
+	require.Len(t, keys.Keys, 1)
+
+	f.do(request{
+		method: http.MethodDelete,
+		path:   "/instances/" + setup.instanceID + "/keys/" + keys.Keys[0].ID,
+		token:  setup.tenant.token,
+	})
+
+	for _, suffix := range []string{"/connect", "/disconnect", "/logout", "/connection"} {
+		method := http.MethodPost
+		if suffix == "/connection" {
+			method = http.MethodGet
+		}
+		resp := f.do(request{
+			method: method,
+			path:   "/instances/" + setup.instanceID + suffix,
+			apiKey: setup.key,
+		})
+		assert.Equal(t, http.StatusUnauthorized, resp.Status, "route %s", suffix)
+	}
+}
+
+// A connect on an instance nobody owns must still reach a worker. The API wakes
+// the fleet and waits; without that, the command evaporates and the tenant
+// watches an empty channel — adopting a lease does not start a pairing window.
+//
+// With no fleet at all the answer is an honest 503 after the wait, never a 202
+// that promises something nobody will do.
+func TestConnectWithoutAFleetFailsInsteadOfPromising(t *testing.T) {
+	f := newFixture(t)
+	setup := f.newConnectionSetup(t, "ACME Corp", "alice@acme.com")
+
+	start := time.Now()
+	resp := f.do(request{
+		method: http.MethodPost,
+		path:   "/instances/" + setup.instanceID + "/connect",
+		apiKey: setup.key,
+	})
+	elapsed := time.Since(start)
+
+	resp.problem(http.StatusServiceUnavailable, "SESSION_UNAVAILABLE")
+	assert.Greater(t, elapsed, 100*time.Millisecond,
+		"the API must give the fleet a chance to claim before giving up")
+
+	// The intent is still recorded, so a worker coming up later adopts it.
+	var intent string
+	require.NoError(t, f.infra.Pool.QueryRow(t.Context(),
+		`SELECT connection_intent FROM instances WHERE id = $1`, setup.instanceID).Scan(&intent))
+	assert.Equal(t, "active", intent)
 }

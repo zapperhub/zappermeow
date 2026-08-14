@@ -8,8 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/zapperhub/zappermeow/internal/domain"
 	"github.com/zapperhub/zappermeow/internal/events"
 	"github.com/zapperhub/zappermeow/internal/lease"
@@ -80,6 +78,10 @@ type managedSession struct {
 	generation int64
 	session    wa.Session
 
+	// ctx lives as long as the session does. The socket is bound to whatever
+	// context opens it, so anything shorter — a pairing window, a single
+	// command — would take the connection down with it.
+	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
 
@@ -155,7 +157,7 @@ func (s *Supervisor) Adopt(ctx context.Context, instanceID domain.ID) error {
 
 // start builds the session and begins pumping its events.
 func (s *Supervisor) start(ctx context.Context, instanceID domain.ID, generation int64) error {
-	instance, err := s.queries.GetInstanceConnectionByID(ctx, uuid.UUID(instanceID))
+	instance, err := s.queries.GetInstanceConnectionByID(ctx, instanceID)
 	if err != nil {
 		if store.IsNoRows(err) {
 			return ErrUnknownInstance
@@ -178,6 +180,7 @@ func (s *Supervisor) start(ctx context.Context, instanceID domain.ID, generation
 		instanceID: instanceID,
 		generation: generation,
 		session:    session,
+		ctx:        sessionCtx,
 		cancel:     cancel,
 		done:       make(chan struct{}),
 		inbox:      make(chan wa.Event, 64),
@@ -189,7 +192,33 @@ func (s *Supervisor) start(ctx context.Context, instanceID domain.ID, generation
 
 	go s.pump(sessionCtx, managed)
 	go forward(sessionCtx, session.Events(), managed.inbox)
+
+	// Adopting a lease is not the same as bringing the number online. A paired
+	// instance the tenant wants running has to be dialled here, or a restart
+	// would leave it owned, silent and reported as connected on the strength of
+	// a state nobody refreshed — including missing a logout done from the
+	// handset, which only arrives over a live socket (FR-019, US4 scenario 5).
+	if storedJID != "" && domain.ConnectionIntent(instance.ConnectionIntent) == domain.IntentActive {
+		go s.reconnect(sessionCtx, managed)
+	}
 	return nil
+}
+
+// reconnect dials a session that was adopted with device material already in
+// place. Failure is not fatal: the client retries on its own, and a permanent
+// refusal arrives as an event like any other.
+func (s *Supervisor) reconnect(ctx context.Context, managed *managedSession) {
+	if err := s.setState(ctx, managed.instanceID, domain.InstanceConnecting); err != nil {
+		s.logger.Error("marking session as connecting failed",
+			slog.String("instance_id", managed.instanceID.String()),
+			slog.String("error", err.Error()))
+	}
+
+	if err := managed.session.Connect(ctx); err != nil {
+		s.logger.Warn("reconnecting an adopted session failed",
+			slog.String("instance_id", managed.instanceID.String()),
+			slog.String("error", err.Error()))
+	}
 }
 
 // forward copies one source into the session inbox. Copying rather than
@@ -301,7 +330,12 @@ func (s *Supervisor) startPairing(ctx context.Context, managed *managedSession) 
 	expiresAt := time.Now().Add(s.pairingWindow)
 	managed.setPairing(cancel, expiresAt)
 
-	if err := managed.session.Connect(pairingCtx); err != nil {
+	// The socket is opened on the session context, never on the pairing one.
+	// HyperMeow derives the connection's lifetime from the context given here,
+	// and pairing ends by cancelling its own window — which would drop the
+	// socket at the exact moment the handshake succeeds, leaving the handset
+	// waiting forever for a sync that never comes.
+	if err := managed.session.Connect(managed.ctx); err != nil {
 		managed.cancelPairing()
 		return time.Time{}, fmt.Errorf("connect for pairing: %w", err)
 	}
@@ -337,6 +371,12 @@ func (s *Supervisor) PairPhone(ctx context.Context, instanceID domain.ID, phoneN
 
 	code, expiresAt, err := managed.session.PairPhone(ctx, phoneNumber)
 	if err != nil {
+		// WhatsApp rejects pairing for reasons the platform cannot infer — an
+		// unknown number, a rate limit, an account restriction. The reason only
+		// exists here, so it is logged here or it is lost.
+		s.logger.Error("pairing by phone was refused",
+			slog.String("instance_id", instanceID.String()),
+			slog.String("error", err.Error()))
 		return "", time.Time{}, err
 	}
 
@@ -409,7 +449,7 @@ func (s *Supervisor) Logout(ctx context.Context, instanceID domain.ID, allowTemp
 		reason = domain.ReasonLogoutLocalOnly
 	}
 
-	if err := s.queries.ClearDeviceIdentity(ctx, uuid.UUID(instanceID)); err != nil {
+	if err := s.queries.ClearDeviceIdentity(ctx, instanceID); err != nil {
 		return remoteRemoved, fmt.Errorf("clear device identity: %w", err)
 	}
 	s.record(ctx, instanceID, domain.ConnEventLoggedOut, reason, nil)
@@ -437,7 +477,7 @@ func (s *Supervisor) Status(ctx context.Context, instanceID domain.ID) (StatusSn
 		return StatusSnapshot{}, ErrUnknownInstance
 	}
 
-	row, err := s.queries.GetInstanceConnectionByID(ctx, uuid.UUID(instanceID))
+	row, err := s.queries.GetInstanceConnectionByID(ctx, instanceID)
 	if err != nil {
 		if store.IsNoRows(err) {
 			return StatusSnapshot{}, ErrUnknownInstance

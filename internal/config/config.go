@@ -81,6 +81,17 @@ type Config struct {
 	LeaseExpiry            time.Duration `env:"LEASE_EXPIRY" envDefault:"30s"`
 	ReconcileInterval      time.Duration `env:"RECONCILE_INTERVAL" envDefault:"15s"`
 
+	// DeviceName is what the customer sees under "Linked devices" on their
+	// phone. Self-hosters brand it; leaving it at the default would show every
+	// deployment as the same generic client.
+	DeviceName string `env:"DEVICE_NAME" envDefault:"ZapperMeow"`
+
+	// ClaimWait is how long a connect or pairing command waits for a worker to
+	// take the session before reporting no capacity. Claiming travels over
+	// pub/sub and adoption is one atomic UPDATE, so a healthy fleet answers in
+	// milliseconds; this only has to cover a busy worker, not an absent one.
+	ClaimWait time.Duration `env:"CLAIM_WAIT" envDefault:"3s"`
+
 	// ConnectionEventsRetention bounds the connection trail (FR-037).
 	ConnectionEventsRetention time.Duration `env:"CONNECTION_EVENTS_RETENTION" envDefault:"720h"`
 }
@@ -185,6 +196,9 @@ func (c *Config) Validate() error {
 	// prevent. Three heartbeats of slack tolerates a missed tick plus jitter.
 	if c.LeaseExpiry < 3*c.LeaseHeartbeatInterval {
 		problems = append(problems, fmt.Sprintf("%sLEASE_EXPIRY must be at least 3x %sLEASE_HEARTBEAT_INTERVAL", envPrefix, envPrefix))
+	}
+	if c.ClaimWait <= 0 {
+		problems = append(problems, envPrefix+"CLAIM_WAIT must be positive")
 	}
 	if c.ReconcileInterval <= 0 {
 		problems = append(problems, envPrefix+"RECONCILE_INTERVAL must be positive")

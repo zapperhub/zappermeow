@@ -141,8 +141,10 @@ func statusFor(code domain.Code) int {
 		return http.StatusConflict
 	case domain.CodeInvalidPhoneNumber:
 		return http.StatusUnprocessableEntity
-	case domain.CodeSessionUnavailable:
+	case domain.CodeSessionUnavailable, domain.CodeSessionNotRunning:
 		return http.StatusServiceUnavailable
+	case domain.CodeWhatsAppUnavailable:
+		return http.StatusBadGateway
 	default:
 		return http.StatusInternalServerError
 	}

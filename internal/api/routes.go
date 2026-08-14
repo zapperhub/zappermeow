@@ -14,11 +14,11 @@ import (
 	"github.com/zapperhub/zappermeow/internal/api/middleware"
 	"github.com/zapperhub/zappermeow/internal/api/sessionclient"
 	"github.com/zapperhub/zappermeow/internal/api/ws"
-	"github.com/zapperhub/zappermeow/internal/events"
-	"github.com/zapperhub/zappermeow/internal/lease"
 	"github.com/zapperhub/zappermeow/internal/config"
 	"github.com/zapperhub/zappermeow/internal/domain"
 	"github.com/zapperhub/zappermeow/internal/domain/services"
+	"github.com/zapperhub/zappermeow/internal/events"
+	"github.com/zapperhub/zappermeow/internal/lease"
 	"github.com/zapperhub/zappermeow/internal/store"
 )
 
@@ -107,7 +107,7 @@ func (s *Server) RegisterRoutes(deps RouteDeps) {
 		connectionGroup.UseMiddleware(connectionAuth.Authenticate())
 		connectionGroup.UseMiddleware(connectionLimiter.Limit())
 
-		connections := services.NewConnectionService(deps.Queries, deps.Leases, deps.Sessions, deps.Publisher)
+		connections := services.NewConnectionService(deps.Queries, deps.Leases, deps.Sessions, deps.Publisher, deps.Logger, cfg.ClaimWait)
 		connectionHandler := handlers.NewConnectionHandler(connections)
 		connectionHandler.Register(connectionGroup)
 		connectionHandler.RegisterQueries(connectionGroup)

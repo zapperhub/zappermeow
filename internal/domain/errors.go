@@ -23,11 +23,13 @@ const (
 	CodeInternal               Code = "INTERNAL_ERROR"
 
 	// Connection codes (feature 002). Each is contract: clients branch on them.
-	CodeInstanceNotPaired  Code = "INSTANCE_NOT_PAIRED"
-	CodeAlreadyPaired      Code = "ALREADY_PAIRED"
-	CodePairingInProgress  Code = "PAIRING_IN_PROGRESS"
-	CodeInvalidPhoneNumber Code = "INVALID_PHONE_NUMBER"
-	CodeSessionUnavailable Code = "SESSION_UNAVAILABLE"
+	CodeInstanceNotPaired   Code = "INSTANCE_NOT_PAIRED"
+	CodeAlreadyPaired       Code = "ALREADY_PAIRED"
+	CodePairingInProgress   Code = "PAIRING_IN_PROGRESS"
+	CodeInvalidPhoneNumber  Code = "INVALID_PHONE_NUMBER"
+	CodeSessionUnavailable  Code = "SESSION_UNAVAILABLE"
+	CodeWhatsAppUnavailable Code = "WHATSAPP_UNAVAILABLE"
+	CodeSessionNotRunning   Code = "SESSION_NOT_RUNNING"
 
 	// Codes below cover the protocol-level refusals the framework raises before
 	// a handler is ever reached. They are part of the published catalogue: a
@@ -194,4 +196,22 @@ func ErrInvalidPhoneNumber() *Error {
 // now — a deploy, a failover, or a fleet with no spare capacity.
 func ErrSessionUnavailable() *Error {
 	return &Error{Code: CodeSessionUnavailable, Detail: "No session worker is available to serve this command"}
+}
+
+// ErrWhatsAppUnavailable reports that the command reached a worker but WhatsApp
+// itself failed or refused. Distinct from ErrSessionUnavailable on purpose: one
+// says the platform has no capacity, the other says the upstream is the problem,
+// and conflating them sends the tenant looking in the wrong place.
+func ErrWhatsAppUnavailable() *Error {
+	return &Error{Code: CodeWhatsAppUnavailable, Detail: "WhatsApp did not accept the command"}
+}
+
+// ErrSessionNotRunning reports that the worker holding the lease has no session
+// in memory for this instance — a stale ownership record. Reconnecting is the
+// way out, so the tenant is told to retry rather than left guessing.
+func ErrSessionNotRunning() *Error {
+	return &Error{
+		Code:   CodeSessionNotRunning,
+		Detail: "The session is not running on the worker that owns it; connect again to restart it",
+	}
 }

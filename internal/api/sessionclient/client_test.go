@@ -47,7 +47,8 @@ func (s *stubWorker) Connect(_ context.Context, req *sessionv1.ConnectRequest) (
 func startWorker(t *testing.T, name string, forceError error) (*stubWorker, string) {
 	t.Helper()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	worker := &stubWorker{name: name, forceError: forceError}
@@ -90,7 +91,7 @@ func setup(t *testing.T) *fixture {
 	client := sessionclient.New(reader, infra.Redis, logger)
 	t.Cleanup(func() { _ = client.Close() })
 
-	return &fixture{infra: infra, client: client, instanceID: domain.ID(instanceID), ctx: ctx}
+	return &fixture{infra: infra, client: client, instanceID: instanceID, ctx: ctx}
 }
 
 // acquireFor makes a worker the registered owner of the instance.
@@ -154,7 +155,7 @@ func TestStaleOwnerIsNotDialled(t *testing.T) {
 
 	_, err := f.infra.Pool.Exec(f.ctx,
 		`UPDATE session_leases SET heartbeat_at = now() - interval '2 minutes' WHERE instance_id = $1`,
-		uuid.UUID(f.instanceID))
+		f.instanceID)
 	require.NoError(t, err)
 
 	_, err = f.client.Connect(f.ctx, f.instanceID)
@@ -181,7 +182,7 @@ func TestWrongGenerationRetriesAgainstTheNewOwner(t *testing.T) {
 	// Ownership moves.
 	_, err = f.infra.Pool.Exec(f.ctx,
 		`UPDATE session_leases SET heartbeat_at = now() - interval '2 minutes' WHERE instance_id = $1`,
-		uuid.UUID(f.instanceID))
+		f.instanceID)
 	require.NoError(t, err)
 	f.acquireFor(t, "worker-fresh", freshAddr)
 

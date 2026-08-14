@@ -12,11 +12,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	whatsmeow "github.com/polymorfa/hypermeow"
+	"github.com/polymorfa/hypermeow/proto/waCompanionReg"
 	"github.com/polymorfa/hypermeow/store"
 	"github.com/polymorfa/hypermeow/store/sqlstore"
 	"github.com/polymorfa/hypermeow/types"
 	"github.com/polymorfa/hypermeow/types/events"
 	waLog "github.com/polymorfa/hypermeow/util/log"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/zapperhub/zappermeow/internal/domain"
 )
@@ -40,7 +42,19 @@ type Container struct {
 // against the same database (Principle I, research R1). Upgrade applies the
 // library's own migrations, versioned in whatsmeow_version and untouched by our
 // golang-migrate schema.
-func NewContainer(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) (*Container, error) {
+func NewContainer(ctx context.Context, pool *pgxpool.Pool, deviceName string, logger *slog.Logger) (*Container, error) {
+	// These properties are registered with WhatsApp at pairing time and are what
+	// the customer sees in "Linked devices" on their phone. The library defaults
+	// to an unknown platform, which the handset renders as "Other device" — a
+	// number the tenant cannot identify is a number they cannot safely unlink.
+	//
+	// PlatformType also decides the client type sent in a phone-code request,
+	// so it must stay consistent with the display name used there.
+	if deviceName != "" {
+		store.DeviceProps.Os = proto.String(deviceName)
+	}
+	store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
+
 	db := stdlib.OpenDBFromPool(pool)
 
 	waLogger := slogAdapter{logger: logger.With(slog.String("component", "hypermeow"))}
@@ -77,10 +91,15 @@ func (c *Container) NewSession(ctx context.Context, instanceID domain.ID, stored
 			return nil, fmt.Errorf("load device: %w", err)
 		}
 		if device == nil {
-			// The row vanished under us — the instance believes it is paired
-			// but the material is gone. Pairing again is the only way out, and
-			// pretending otherwise would loop forever on a dead session.
-			return nil, fmt.Errorf("%w: no device material for %s", ErrNotPaired, storedJID)
+			// The instance believes it is paired but the store has nothing —
+			// a remote logout the platform did not record, or material removed
+			// out of band. Refusing here would strand the instance forever;
+			// starting a fresh device lets a connect command pair it again,
+			// which is the only way back.
+			c.logger.Warn("device material is missing; starting a fresh device",
+				slog.String("instance_id", instanceID.String()),
+				slog.String("stored_jid", storedJID))
+			device = c.container.NewDevice()
 		}
 	} else {
 		device = c.container.NewDevice()
@@ -205,12 +224,23 @@ func (s *hypermeowSession) PairPhone(ctx context.Context, phoneNumber string) (s
 		if err := s.client.Connect(); err != nil {
 			return "", time.Time{}, fmt.Errorf("connect before phone pairing: %w", err)
 		}
+		if !s.client.WaitForConnection(connectWait) {
+			return "", time.Time{}, fmt.Errorf("connect before phone pairing: socket did not come up in %s", connectWait)
+		}
+		// Connect returns once the handshake is done, but the server only
+		// accepts a pairing request after the login socket is fully
+		// established — which it signals by sending the first QR ref. The
+		// library's own guidance is to wait for that event or to pause briefly;
+		// asking too early is answered with a 400.
+		time.Sleep(pairingSettle)
 	}
 
-	code, err := s.client.PairPhone(ctx, phoneNumber, true, whatsmeow.PairClientChrome, "ZapperMeow")
+	code, err := s.client.PairPhone(ctx, phoneNumber, true, whatsmeow.PairClientChrome, pairDisplayName)
 	if err != nil {
 		if errors.Is(err, whatsmeow.ErrPhoneNumberTooShort) || errors.Is(err, whatsmeow.ErrPhoneNumberIsNotInternational) {
-			return "", time.Time{}, fmt.Errorf("%w: %s", ErrInvalidPhoneNumber, err)
+			// Both errors matter: the sentinel drives the HTTP code, the
+			// library's message says which rule the number broke.
+			return "", time.Time{}, errors.Join(ErrInvalidPhoneNumber, err)
 		}
 		return "", time.Time{}, fmt.Errorf("request pairing code: %w", err)
 	}
@@ -228,6 +258,22 @@ func (s *hypermeowSession) PairPhone(ctx context.Context, phoneNumber string) (s
 // phonePairingWindow is how long a phone pairing code stays usable. WhatsApp
 // does not report a deadline, so this is the value shown to the tenant.
 const phonePairingWindow = 3 * time.Minute
+
+// pairDisplayName is what the handset shows next to the linked device.
+//
+// It is NOT free text: WhatsApp validates it against a list of common
+// browser/OS pairs and answers 400 to anything else — a product name here is
+// rejected outright. It must stay consistent with the PairClient* constant sent
+// alongside it, which is why both say Chrome.
+const pairDisplayName = "Chrome (Linux)"
+
+// connectWait bounds how long we wait for the login socket, and pairingSettle
+// is the pause the library recommends before requesting a code: the server
+// rejects a request that arrives before the session is fully established.
+const (
+	connectWait   = 10 * time.Second
+	pairingSettle = 1500 * time.Millisecond
+)
 
 func (s *hypermeowSession) Connect(ctx context.Context) error {
 	if s.client.IsConnected() {
@@ -343,7 +389,9 @@ func (s *hypermeowSession) reconnectHook(err error) bool {
 	// of stacking every session on the same instant.
 	attempts := s.client.AutoReconnectErrors
 	delay := min(time.Duration(attempts)*2*time.Second, reconnectCeiling)
-	jitter := time.Duration(rand.Int64N(int64(delay/4 + 1)))
+	// Spreading reconnections in time is scheduling, not secrecy: predicting
+	// this jitter gains an attacker nothing.
+	jitter := time.Duration(rand.Int64N(int64(delay/4 + 1))) //nolint:gosec // not security-sensitive
 
 	s.logger.Debug("scheduling reconnect",
 		slog.Int("attempts", attempts),

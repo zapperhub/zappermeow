@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -164,5 +165,5 @@ func (r *Runtime) stop(ctx context.Context, instanceID domain.ID) {
 }
 
 func isLost(err error) bool {
-	return err == lease.ErrNotAcquired || err == ErrDraining
+	return errors.Is(err, lease.ErrNotAcquired) || errors.Is(err, ErrDraining)
 }

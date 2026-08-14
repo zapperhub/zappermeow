@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net"
@@ -67,7 +69,7 @@ func runSessionWorker(ctx context.Context) error {
 	}
 	defer func() { _ = redisClient.Close() }()
 
-	container, err := wa.NewContainer(ctx, pool, logger)
+	container, err := wa.NewContainer(ctx, pool, cfg.DeviceName, logger)
 	if err != nil {
 		return err
 	}
@@ -100,7 +102,8 @@ func runSessionWorker(ctx context.Context) error {
 		ReconcileInterval: cfg.ReconcileInterval,
 	})
 
-	listener, err := net.Listen("tcp", cfg.WorkerGRPCListenAddr)
+	var listenConfig net.ListenConfig
+	listener, err := listenConfig.Listen(ctx, "tcp", cfg.WorkerGRPCListenAddr)
 	if err != nil {
 		return fmt.Errorf("listen for grpc: %w", err)
 	}
@@ -146,13 +149,25 @@ func runSessionWorker(ctx context.Context) error {
 	}
 }
 
-// workerIdentity builds a stable identity for this process. The advertise
-// address is part of it because it is what makes the identity unique on a host
-// running several workers, and it is also what the API dials.
+// workerIdentity builds an identity unique to this *process*, not to the host
+// or the address it serves on.
+//
+// The random suffix is what makes it safe: a worker killed without draining
+// leaves its leases marked as owned, and a replacement sharing the identity
+// would renew those heartbeats forever while holding no session in memory. The
+// sessions would then never expire, never be adopted, and never come back —
+// every command against them answering "the owner has no such session". With a
+// fresh identity per process the abandoned leases simply expire and the fleet
+// picks them up, which is exactly the failover path that already works.
 func workerIdentity(advertiseAddr string) (string, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		return "", fmt.Errorf("resolve hostname: %w", err)
 	}
-	return fmt.Sprintf("%s/%s", hostname, advertiseAddr), nil
+
+	suffix := make([]byte, 4)
+	if _, err := rand.Read(suffix); err != nil {
+		return "", fmt.Errorf("generate worker identity: %w", err)
+	}
+	return fmt.Sprintf("%s/%s/%s", hostname, advertiseAddr, hex.EncodeToString(suffix)), nil
 }
