@@ -1,6 +1,40 @@
 <!--
 Sync Impact Report
 ==================
+Version change: 2.4.0 → 2.5.0
+Rationale: MINOR — expande materialmente o Princípio V e acrescenta o Princípio VII. Nenhum
+princípio é removido ou redefinido de forma incompatível, e o código atual já satisfaz as
+regras novas; por isso MINOR, não MAJOR.
+
+A emenda codifica o que a entrega 002 custou para aprender. Seis defeitos só apareceram em
+teste manual contra um número real, e dois deles eram invisíveis do lado da plataforma —
+manifestavam-se apenas no aparelho do cliente. A causa raiz não foi falta de testes, foi
+teste que não simulava o WhatsApp: a suíte cobria o caminho feliz do adaptador sem exercitar
+as ordens de chegada, as recusas e os tempos de vida que o serviço real impõe.
+
+Modified principles:
+- V. Testes Contra Infraestrutura Real: passa a exigir (a) sessão roteirizada que simule o
+  comportamento observado do WhatsApp, com cobertura de todo evento que o adaptador
+  classifica; (b) teste nas duas ordens quando eventos chegam por canais distintos; (c)
+  cobertura nomeada do canal WebSocket, que não herda a cadeia de middlewares e por isso não
+  é coberto de graça pelos testes de rota; (d) teste que prove a que contexto cada recurso de
+  ciclo de vida está amarrado; (e) prova de que o teste de regressão falha sem a correção;
+  (f) registro em quickstart.md do que só validação manual revela.
+Added sections:
+- VII. Fidelidade ao HyperMeow: a documentação publicada do fork é fonte de verdade e DEVE
+  ser consultada antes de escrever código que fale com a biblioteca; sequências prescritas
+  são literais; valores validados pelo servidor não são texto livre; divergência resolve-se
+  em favor da biblioteca, com registro em research.md; patch local é proibido e o adaptador
+  `internal/wa` permanece a única fronteira que conhece tipos do HyperMeow (verificado:
+  apenas classify.go, classify_test.go e hypermeow.go importam a biblioteca).
+Removed sections: nenhuma
+Referências técnicas a alinhar nesta emenda: TECH_STACK.md e ARCHITECTURE.md.
+Deferred items / TODOs: nenhum
+-->
+
+<!--
+Sync Impact Report (2.4.0)
+==========================
 Version change: 2.3.0 → 2.4.0
 Rationale: MINOR — corrige um erro factual no modelo de domínio e acrescenta duas regras
 materiais sobre limites. (1) O WhatsApp é multi-dispositivo: um número mantém vários
@@ -153,12 +187,42 @@ infraestrutura:
 - Testes unitários: `go test` + testify, table-driven, para lógica de domínio pura.
 - Testes de integração: testcontainers-go DEVE subir Postgres e Redis reais; queries sqlc,
   handlers, leases e filas são testados contra essas instâncias.
-- Toda correção de bug DEVE incluir um teste que reproduza o defeito antes do fix.
 - O pipeline de CI (lint → testes → build) é bloqueante: código que não passa em
   golangci-lint ou nos testes NÃO PODE ser mergeado.
 
+**Fronteira com o WhatsApp — a única exceção.** O serviço não tem sandbox e automatizá-lo
+arriscaria o banimento do número, então a sessão é substituída por uma **sessão roteirizada**
+que implementa a mesma interface do adaptador. A exceção é o mock; simular mal o WhatsApp
+não é permitido:
+
+- A sessão roteirizada DEVE reproduzir o comportamento **observado** do serviço, não o
+  comportamento conveniente. Todo evento que o adaptador classifica DEVE ter teste — em
+  especial os que só o serviço real produz: logout feito pelo aparelho, desconexão
+  permanente, expiração da janela de pareamento, recusa de pareamento e stream substituído.
+- Quando dois eventos chegam por **canais distintos** e nada ordena os dois, o teste DEVE
+  exercitar as duas ordens. Ordem estável em teste que é instável em produção é o pior
+  resultado possível: esconde o defeito e ainda dá confiança.
+- Todo recurso com ciclo de vida — socket, lease, assinatura, janela de pareamento — DEVE ter
+  teste que prove **a que contexto ele está amarrado**. Confundir o fim de uma etapa com o
+  fim da sessão é a família de defeitos mais cara desta base.
+- O que só o aparelho revela (o dispositivo aparecer na lista, o nome exibido, o pareamento
+  concluir) DEVE ter roteiro de validação manual em `quickstart.md`, com o resultado
+  registrado. Ausência de teste automatizado não dispensa a verificação; muda quem a executa.
+
+**Canal WebSocket.** O canal é montado como handler chi fora do huma e por isso **não herda a
+cadeia de middlewares** — não é coberto de graça pelos testes das rotas REST e DEVE ter
+cobertura própria: handshake autenticado antes do upgrade (cada credencial aceita e cada
+recusa com seu status), recusa de token em query string, política de origem, snapshot como
+primeiro frame, fan-out para múltiplos ouvintes, cliente lento e códigos de fechamento.
+
+**Regressão.** Toda correção de bug DEVE incluir um teste que reproduza o defeito, e o teste
+DEVE ser **provado**: rodado contra o código sem a correção e visto falhar. Teste de
+regressão que passa dos dois lados não testa a correção — documenta uma crença.
+
 **Racional:** o núcleo do sistema é SQL, filas e locking distribuído — exatamente as áreas
-onde mocks escondem bugs.
+onde mocks escondem bugs. E a fronteira que não dá para testar de verdade é justamente a que
+mais engana: os defeitos que chegaram ao cliente na entrega 002 passaram por uma suíte verde
+porque ela exercitava o caminho feliz do adaptador, não o serviço que ele imita.
 
 ### VI. Observabilidade Estruturada
 
@@ -176,6 +240,37 @@ Todo comportamento relevante em produção DEVE ser observável em formato padr�
 **Racional:** operação multi-tenant sem correlação por tenant/instância torna qualquer
 incidente indiagnosticável.
 
+### VII. Fidelidade ao HyperMeow
+
+Ao escrever ou alterar qualquer código que fale com `github.com/polymorfa/hypermeow`, a
+documentação publicada em <https://pkg.go.dev/github.com/polymorfa/hypermeow> é a fonte de
+verdade e DEVE ser consultada **antes** — não a memória, não o whatsmeow upstream, não a
+analogia com outra biblioteca de WhatsApp. Regras:
+
+- Assinatura, pré-condições e ordem de chamadas DEVEM ser conferidas no símbolo real da
+  versão pinada. Inferir a API a partir do nome de um método é PROIBIDO.
+- Sequências que a biblioteca prescreve são **literais**: obter o canal de QR antes de
+  conectar, ajustar as propriedades do dispositivo antes do pareamento, e amarrar o socket ao
+  contexto que deve viver tanto quanto a sessão — `Connect` deriva o tempo de vida da conexão
+  do contexto recebido.
+- Valores que o **servidor do WhatsApp** valida — nome de exibição do dispositivo, tipo de
+  cliente, formato de número — NÃO SÃO texto livre. DEVEM usar as constantes e os formatos
+  que a biblioteca documenta; o servidor recusa o resto, e a recusa chega como erro genérico.
+- Divergência entre o comportamento observado e a expectativa do código resolve-se em favor
+  da biblioteca e do protocolo. A constatação DEVE ser registrada com evidência no
+  `research.md` da feature, para que a próxima pessoa não repita a investigação.
+- HyperMeow é fork: funcionalidade nova é **aditiva salvo nota no changelog**, portanto a
+  documentação do upstream NÃO substitui a do fork. Atualizar a pseudo-versão pinada exige
+  releitura do changelog e revisão dos pontos de integração.
+- Patch local na biblioteca é PROIBIDO. Toda adaptação vive no adaptador `internal/wa`, que
+  DEVE permanecer a única fronteira do repositório a conhecer tipos do HyperMeow — o resto do
+  código fala com a interface de sessão, o que é o que torna a sessão roteirizada possível.
+
+**Racional:** as falhas mais caras desta base vieram de inferir a API em vez de conferi-la.
+Um nome de exibição que o servidor recusa com `400` e um socket amarrado ao contexto errado
+não apareceram em nenhum teste nem em nenhum log da plataforma — apareceram no aparelho do
+cliente, que ficou "processando" para sempre.
+
 ## Restrições Tecnológicas
 
 Stack fixa do projeto — desvios exigem emenda a esta constituição:
@@ -183,7 +278,7 @@ Stack fixa do projeto — desvios exigem emenda a esta constituição:
 - **Linguagem:** Go 1.25+.
 - **Core WhatsApp:** `github.com/polymorfa/hypermeow` (`@main`, pseudo-versão pinada no
   `go.mod`; importa como `whatsmeow`). As tabelas do HyperMeow são migradas pela própria
-  biblioteca.
+  biblioteca. O uso da biblioteca é regido pelo Princípio VII.
 - **HTTP/API:** chi + huma (OpenAPI 3.1).
 - **Dados:** PostgreSQL 17 com pgx v5 (pool único compartilhado entre API e HyperMeow) e
   sqlc; migrações das tabelas da API via golang-migrate, embutidas no binário (`embed.FS`) e
@@ -219,8 +314,9 @@ Stack fixa do projeto — desvios exigem emenda a esta constituição:
 - **CI (GitHub Actions):** golangci-lint → testes (com services de Postgres/Redis) → build
   multi-stage da imagem → push no registry. Pipeline verde é pré-condição de merge.
 - **Review:** todo PR DEVE ser revisado verificando conformidade com esta constituição —
-  em especial isolamento por instância (Princípio II) e respeito ao lease de sessão
-  (Princípio III). Complexidade adicional DEVE ser justificada no PR.
+  em especial isolamento por instância (Princípio II), respeito ao lease de sessão
+  (Princípio III) e, quando tocar a biblioteca, aderência à documentação do HyperMeow
+  (Princípio VII). Complexidade adicional DEVE ser justificada no PR.
 - **Deploy:** Swarm via `docker stack deploy` (rolling update) ou Compose via
   `docker compose up -d`; em ambos os alvos o `session-worker` DEVE ter
   `stop_grace_period` folgado (≥60s) para drain limpo dos leases.
@@ -241,4 +337,4 @@ Stack fixa do projeto — desvios exigem emenda a esta constituição:
   complementam esta constituição; divergências entre eles e este documento resolvem-se em
   favor da constituição e DEVEM gerar correção em um dos lados.
 
-**Version**: 2.4.0 | **Ratified**: 2026-08-12 | **Last Amended**: 2026-08-13
+**Version**: 2.5.0 | **Ratified**: 2026-08-12 | **Last Amended**: 2026-08-13

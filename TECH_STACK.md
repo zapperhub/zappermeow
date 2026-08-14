@@ -148,6 +148,30 @@ Coletores (Grafana, Jaeger, etc.) ficam fora do escopo da API — ela apenas exp
 - **Lint:** golangci-lint.
 - **CI (GitHub Actions):** lint → testes (com services de Postgres/Redis) → build multi-stage da imagem → push no registry.
 
+### A fronteira com o WhatsApp
+
+O WhatsApp é a **única** dependência que não é testada de verdade: não há sandbox, e automatizar o serviço real arriscaria o banimento do número. No lugar dele entra uma **sessão roteirizada** que implementa a mesma interface do adaptador (`internal/wa`).
+
+Isso torna a qualidade da simulação parte do contrato de teste, não um detalhe do fake:
+
+- **Todo evento que o adaptador classifica tem teste** — inclusive os que só o serviço real produz: logout feito pelo aparelho, desconexão permanente, expiração da janela de pareamento, recusa de pareamento e stream substituído.
+- **Eventos que chegam por canais distintos são testados nas duas ordens.** `PairSuccess` vem pelo canal de QR e `Connected` pelo handler de eventos do cliente; nada ordena os dois. Ordem estável no teste e instável em produção é o pior resultado: esconde o defeito e ainda dá confiança.
+- **Recursos com ciclo de vida têm teste do contexto a que estão amarrados.** O socket, o lease, a assinatura e a janela de pareamento vivem tempos diferentes; confundi-los é a família de defeitos mais cara desta base. A sessão roteirizada guarda o contexto recebido em `Connect` justamente para que isso seja verificável.
+- **Teste de regressão é provado**: rodado contra o código sem a correção e visto falhar. Um teste que passa dos dois lados não testa a correção — documenta uma crença.
+- **O que só o aparelho revela** — o dispositivo aparecer na lista de vinculados, o nome exibido, o pareamento concluir — tem roteiro manual em `quickstart.md`, com resultado registrado.
+
+### O canal WebSocket tem cobertura própria
+
+O canal é montado como handler chi **fora do huma** e por isso não herda a cadeia de middlewares. Ele não é coberto de graça pelos testes das rotas REST, e a cobertura é nomeada: handshake autenticado antes do upgrade (cada credencial aceita e cada recusa com seu status HTTP), recusa de token em query string, política de origem, snapshot como primeiro frame, fan-out para vários ouvintes, cliente lento e códigos de fechamento.
+
+### Aderência à documentação do HyperMeow
+
+Código que fala com a biblioteca é escrito contra a [documentação publicada](https://pkg.go.dev/github.com/polymorfa/hypermeow), consultada **antes** — não contra a memória, o whatsmeow upstream ou a analogia com outra biblioteca de WhatsApp. HyperMeow é fork: funcionalidade nova é aditiva salvo nota no changelog, então doc do upstream não substitui a do fork, e subir a pseudo-versão pinada exige releitura do changelog.
+
+Na prática isso significa tratar como literais as sequências que a biblioteca prescreve (canal de QR obtido antes de conectar, propriedades do dispositivo ajustadas antes do pareamento, socket amarrado ao contexto que deve viver tanto quanto a sessão) e usar as constantes documentadas para valores que o **servidor** valida — nome de exibição do dispositivo, tipo de cliente, formato de número não são texto livre. Quando o comportamento observado contradiz a expectativa do código, a biblioteca vence e a constatação é registrada com evidência no `research.md` da feature.
+
+Patch local na biblioteca não é opção: `internal/wa` é a única fronteira do repositório que conhece tipos do HyperMeow, e é isso que torna a sessão roteirizada possível.
+
 ## Runtime e deploy
 
 ### Docker Swarm e Docker Compose

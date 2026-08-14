@@ -218,6 +218,45 @@ asynq: subir o serviço `jobs` inteiro para um `DELETE` diário seria desproporc
 lock varre, os demais pulam sem bloquear. Quando os webhooks trouxerem o `jobs`, a varredura migra
 para lá.
 
+## Como isto é testado
+
+Postgres e Redis sobem de verdade (testcontainers) porque o núcleo do sistema é SQL, lease e
+pub/sub — exatamente onde mock esconde bug. **O WhatsApp é a única exceção**: não tem sandbox, e
+automatizá-lo arriscaria o banimento do número.
+
+A costura que torna isso possível é a interface de sessão em `internal/wa`. O worker não conhece o
+HyperMeow; ele conhece `wa.Session`. Em produção a implementação é o adaptador da biblioteca; em
+teste é uma **sessão roteirizada** que emite os mesmos eventos. Como só `internal/wa` importa a
+biblioteca, o supervisor, o pump de eventos, o lease e o barramento são todos exercitáveis sem
+tocar no serviço real.
+
+Isso desloca o risco, não o elimina: **a suíte agora vale o quanto a simulação for fiel.** A
+entrega 002 provou o custo disso — seis defeitos passaram por uma suíte verde porque ela
+exercitava o caminho feliz do adaptador em vez do serviço que ele imita, e dois deles eram
+invisíveis do lado da plataforma: só apareciam no aparelho do cliente. Daí as regras que a
+[constituição](.specify/memory/constitution.md) fixou no Princípio V:
+
+- Todo evento que o adaptador classifica tem teste, inclusive logout pelo aparelho, desconexão
+  permanente, expiração da janela e stream substituído.
+- Eventos que chegam por canais distintos são testados **nas duas ordens** — o caso de
+  `PairSuccess` × `Connected` descrito acima não é hipotético, é um bug que aconteceu.
+- Cada recurso com ciclo de vida tem teste do **contexto a que está amarrado**. O socket vive
+  enquanto a sessão; a janela de pareamento morre antes. Trocar um pelo outro derruba a conexão no
+  exato instante do sucesso — e é por isso que a sessão roteirizada guarda o contexto recebido em
+  `Connect`.
+- O canal WebSocket tem cobertura própria porque **não herda a cadeia de middlewares**: sendo
+  handler chi fora do huma, autenticação, rate limiting e log são aplicados explicitamente, e o que
+  é explícito precisa ser verificado.
+- O que só o aparelho revela fica em `quickstart.md` como roteiro manual, com resultado registrado.
+
+**Fidelidade ao HyperMeow.** `internal/wa` é a única fronteira que fala a língua da biblioteca, e o
+que se escreve nela é escrito contra a [documentação publicada](https://pkg.go.dev/github.com/polymorfa/hypermeow),
+consultada antes — não contra a memória nem contra o whatsmeow upstream, já que HyperMeow é fork e
+funcionalidade nova é aditiva salvo nota no changelog. Sequências prescritas pela biblioteca são
+literais, e valores que o **servidor** valida (nome de exibição do dispositivo, tipo de cliente)
+não são texto livre. Divergência entre o observado e o esperado resolve-se em favor da biblioteca,
+com a evidência registrada no `research.md` da feature.
+
 ## Topologia de deploy
 
 A entrega inicial suporta dois alvos com os mesmos serviços:
@@ -269,6 +308,7 @@ zappermeow/
 | Binário único multi-role | Um build, uma imagem, código de domínio compartilhado sem versionamento interno |
 | Eventos via Redis pub/sub + asynq | Pub/sub para tempo real (WS), asynq para entrega garantida (webhooks) |
 | API keys e webhooks por instância | Isolamento por instância: vazamento/rotação de credenciais de uma instância não afeta as demais; sistemas distintos usam instâncias distintas, até de um mesmo número |
+| HyperMeow confinado em `internal/wa` | Única fronteira que conhece a biblioteca — é o que permite substituí-la por sessão roteirizada e testar todo o resto sem tocar no WhatsApp |
 
 ## Limites conhecidos e evolução
 
